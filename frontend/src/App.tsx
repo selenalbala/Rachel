@@ -1,26 +1,448 @@
-import { useEffect,useMemo,useState } from 'react';
-import { CalendarDays,Users,Scissors,ClipboardList,Package,ChartNoAxesCombined,Settings,Search,Bell,Plus,ChevronLeft,ChevronRight,Sparkles,Wifi,WifiOff,Clock3,Euro,Boxes,MessageSquareText } from 'lucide-react';
-import { getDashboard } from './lib/api';
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  Boxes,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  PackagePlus,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  UserRoundPlus,
+  Users,
+  X
+} from "lucide-react";
+import { api, getToken, setToken } from "./api";
+import type { Client, Product, User } from "./types";
 
-type AnyObj=Record<string,any>;
-const menu=[[CalendarDays,'Inicio'],[CalendarDays,'Agenda'],[Users,'Clientes'],[Scissors,'Servicios'],[ClipboardList,'Solicitudes'],[Package,'Stock'],[Euro,'Ventas'],[Users,'Empleados'],[ChartNoAxesCombined,'Informes'],[Settings,'Configuración']] as const;
-const money=(c:number)=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(c/100);
-const hh=(d:string)=>new Date(d).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
-function App(){
- const [data,setData]=useState<AnyObj|null>(null); const [error,setError]=useState(''); const [online,setOnline]=useState(navigator.onLine);
- useEffect(()=>{getDashboard().then(setData).catch(()=>setError('Mostrando modo demostración sin conexión.')); const on=()=>setOnline(navigator.onLine); addEventListener('online',on);addEventListener('offline',on);return()=>{removeEventListener('online',on);removeEventListener('offline',on)}},[]);
- const fallback=useMemo(()=>({stats:{appointmentsToday:12,pendingRequests:3,lowStock:4,revenueTodayCents:89050},appointments:[],employees:[{id:'1',name:'Laura',role:'Peluquería'},{id:'2',name:'Marta',role:'Peluquería'},{id:'3',name:'Sara',role:'Estética'},{id:'4',name:'Nerea',role:'Estética'}],lowStock:[{id:'1',name:'Oxidante 20 vol.',stock:2,minStock:5,unit:'uds.'},{id:'2',name:'Tinte 6.0',stock:3,minStock:10,unit:'uds.'},{id:'3',name:'Guantes nitrilo',stock:4,minStock:10,unit:'cajas'}],requests:[]}),[]);
- const d=data||fallback;
- const sample=[['María López','Corte mujer','09:00','10:00',0],['Ana Pérez','Coloración','11:00','12:30',0],['Laura Gómez','Mechas balayage','14:00','16:00',0],['Julia Martín','Corte + Peinado','10:00','11:00',1],['Paula Torres','Tinte completo','12:00','13:30',1],['Clara Vega','Limpieza facial','09:30','10:30',2],['Patricia Gil','Manicura','11:30','12:30',2],['Lucía Fernández','Ext. pestañas','10:00','11:30',3],['Alba Jiménez','Micropigmentación','12:00','13:30',3]];
- const appts=d.appointments.length?d.appointments.map((a:any)=>[a.client.name,a.services.map((x:any)=>x.service.name).join(' + '),hh(a.startsAt),hh(a.endsAt),d.employees.findIndex((e:any)=>e.id===a.employeeId)]):sample;
- return <div className="shell">
-  <aside><div className="brand"><div className="brandMark"><Sparkles/></div><div><b>Bella</b><span>SALÓN DE BELLEZA</span></div></div><nav>{menu.map(([I,t],i)=><button className={i===0?'active':''} key={t}><I size={20}/><span>{t}</span>{t==='Solicitudes'&&<em>3</em>}</button>)}</nav><div className="profile"><div className="avatar">LG</div><div><b>Laura Gómez</b><span>Administradora</span></div></div><div className="sync">{online?<Wifi size={18}/>:<WifiOff size={18}/>}<div><b>{online?'Sincronizado':'Sin conexión'}</b><span>{online?'Todo al día':'Cambios locales'}</span></div></div></aside>
-  <main><header><div><h1>¡Hola, <span>Laura!</span> 💕</h1><p>{new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'})}</p></div><div className="search"><Search/><input placeholder="Buscar clientes, citas, servicios..."/></div><button className="primary"><Plus/>Nueva cita</button><button className="icon"><Bell/></button><button className="icon"><MessageSquareText/></button></header>
-  {error&&<div className="notice">{error}</div>}
-  <section className="stats"><Card icon={<CalendarDays/>} value={d.stats.appointmentsToday} label="Citas hoy"/><Card icon={<Users/>} value={d.stats.pendingRequests} label="Solicitudes"/><Card icon={<Boxes/>} value={d.stats.lowStock} label="Stock bajo"/><Card icon={<Euro/>} value={money(d.stats.revenueTodayCents)} label="Facturación hoy"/></section>
-  <div className="content"><section className="agenda"><div className="agendaHead"><div><h2>Agenda</h2><span>Hoy</span></div><div className="seg"><button className="on">Día</button><button>Semana</button><button>Mes</button></div><div className="arrows"><button><ChevronLeft/></button><button><ChevronRight/></button><button>Hoy</button></div></div><div className="calendar"><div className="timeHead"></div>{d.employees.map((e:any)=><div className="emp" key={e.id}><div className="miniAvatar">{e.name[0]}</div><b>{e.name}</b><span>{e.role}</span></div>)}{Array.from({length:13},(_,i)=><div className="time" style={{gridRow:i+2}} key={i}>{String(i+8).padStart(2,'0')}:00</div>)}{d.employees.map((_:any,c:number)=><div className="lane" style={{gridColumn:c+2}} key={c}></div>)}{appts.map((a:any,i:number)=>{const start=Number(a[2].slice(0,2))+Number(a[2].slice(3))/60; const end=Number(a[3].slice(0,2))+Number(a[3].slice(3))/60; return <div className={`appt c${a[4]}`} style={{gridColumn:a[4]+2,gridRow:`${Math.round((start-8)*2)+2} / span ${Math.max(1,Math.round((end-start)*2))}`}} key={i}><b>{a[0]}</b><span>{a[1]}</span><small>{a[2]} - {a[3]}</small></div>})}<div className="now"><span>14:30</span></div></div></section>
-  <aside className="right"><Panel title="Próxima cita"><div className="next"><div className="bigAvatar">ML</div><div><b>María López</b><strong>Corte mujer</strong><span>Hoy 09:00 · Laura</span><em>Confirmada</em></div></div><button className="wide">Ver cita</button></Panel><Panel title="Stock bajo">{d.lowStock.slice(0,4).map((p:any)=><div className="stock" key={p.id}><div className="product">{p.name[0]}</div><div><b>{p.name}</b><div className="bar"><i style={{width:`${Math.min(100,(p.stock/p.minStock)*100)}%`}}/></div></div><span>{p.stock} {p.unit}<small>Mínimo: {p.minStock}</small></span></div>)}</Panel><Panel title="Solicitudes recientes">{(d.requests.length?d.requests:[{id:1,client:{name:'Ana García'},title:'Mechas balayage',status:'NEW'},{id:2,client:{name:'Julia Martínez'},title:'Tratamiento capilar',status:'REVIEWING'}]).map((r:any)=><div className="request" key={r.id}><div className="miniAvatar">{r.client.name[0]}</div><div><b>{r.client.name}</b><span>{r.title}</span></div><em>{r.status==='NEW'?'Nueva':'Pendiente'}</em></div>)}</Panel></aside></div></main></div>
+type Page = "dashboard" | "clients" | "stock";
+
+const emptyClient = {
+  name: "",
+  phone: "",
+  email: "",
+  birthday: "",
+  allergies: "",
+  notes: ""
+};
+
+const emptyProduct = {
+  name: "",
+  brand: "",
+  category: "",
+  supplier: "",
+  sku: "",
+  cost: 0,
+  price: 0,
+  quantity: 0,
+  minimum: 0,
+  notes: ""
+};
+
+function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
+
+  useEffect(() => {
+    if (!getToken()) {
+      setLoadingSession(false);
+      return;
+    }
+
+    api<User>("/auth/me")
+      .then(setUser)
+      .catch(() => setToken(null))
+      .finally(() => setLoadingSession(false));
+  }, []);
+
+  if (loadingSession) return <div className="screen-center">Cargando Rachel Studio…</div>;
+  if (!user) return <Login onLogin={setUser} />;
+
+  return <Workspace user={user} onLogout={() => { setToken(null); setUser(null); }} />;
 }
-function Card({icon,value,label}:{icon:any,value:any,label:string}){return <div className="card"><div className="cardIcon">{icon}</div><div><b>{value}</b><span>{label}</span><a>Ver detalles →</a></div></div>}
-function Panel({title,children}:{title:string,children:any}){return <section className="panel"><h3>{title}<a>Ver todo</a></h3>{children}</section>}
+
+function Login({ onLogin }: { onLogin: (user: User) => void }) {
+  const [email, setEmail] = useState("admin@rachelstudio.es");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    setSending(true);
+
+    try {
+      const result = await api<{ token: string; user: User }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password })
+      });
+      setToken(result.token);
+      onLogin(result.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo iniciar sesión.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-panel">
+        <div className="brand-mark">RS</div>
+        <p className="eyebrow">Gestión profesional</p>
+        <h1>Rachel Studio</h1>
+        <p className="muted">Accede al panel de gestión de clientas y almacén.</p>
+
+        <form onSubmit={submit} className="form-stack">
+          <label>Correo<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
+          <label>Contraseña<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
+          {error && <div className="error-box">{error}</div>}
+          <button className="primary-button" disabled={sending}>{sending ? "Entrando…" : "Iniciar sesión"}</button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const [page, setPage] = useState<Page>("dashboard");
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const title = page === "dashboard" ? "Resumen" : page === "clients" ? "Clientas" : "Stock";
+
+  function navigate(next: Page) {
+    setPage(next);
+    setMobileOpen(false);
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
+        <div className="sidebar-head">
+          <div className="brand-small">RS</div>
+          <div><strong>Rachel Studio</strong><span>Panel de gestión</span></div>
+          <button className="icon-button mobile-only" onClick={() => setMobileOpen(false)}><X size={20} /></button>
+        </div>
+
+        <nav>
+          <button className={page === "dashboard" ? "active" : ""} onClick={() => navigate("dashboard")}><LayoutDashboard size={19} />Resumen</button>
+          <button className={page === "clients" ? "active" : ""} onClick={() => navigate("clients")}><Users size={19} />Clientas</button>
+          <button className={page === "stock" ? "active" : ""} onClick={() => navigate("stock")}><Boxes size={19} />Stock</button>
+        </nav>
+
+        <div className="sidebar-user">
+          <div><strong>{user.name}</strong><span>{user.email}</span></div>
+          <button className="icon-button" title="Cerrar sesión" onClick={onLogout}><LogOut size={18} /></button>
+        </div>
+      </aside>
+
+      {mobileOpen && <div className="overlay" onClick={() => setMobileOpen(false)} />}
+
+      <main className="main-content">
+        <header className="topbar">
+          <button className="icon-button mobile-only" onClick={() => setMobileOpen(true)}><Menu /></button>
+          <div><p className="eyebrow">Rachel Studio</p><h2>{title}</h2></div>
+        </header>
+
+        {page === "dashboard" && <Dashboard goTo={navigate} />}
+        {page === "clients" && <ClientsPage />}
+        {page === "stock" && <StockPage />}
+      </main>
+    </div>
+  );
+}
+
+function Dashboard({ goTo }: { goTo: (page: Page) => void }) {
+  const [stats, setStats] = useState({ clients: 0, products: 0, lowStock: 0 });
+
+  useEffect(() => {
+    api<typeof stats>("/dashboard").then(setStats).catch(console.error);
+  }, []);
+
+  return (
+    <section className="page">
+      <div className="stats-grid">
+        <article className="stat-card"><span>Clientas registradas</span><strong>{stats.clients}</strong><Users /></article>
+        <article className="stat-card"><span>Productos registrados</span><strong>{stats.products}</strong><Boxes /></article>
+        <article className={`stat-card ${stats.lowStock > 0 ? "warning" : ""}`}><span>Productos bajo mínimo</span><strong>{stats.lowStock}</strong><PackagePlus /></article>
+      </div>
+
+      <div className="content-card">
+        <div className="section-heading"><div><p className="eyebrow">Acciones rápidas</p><h3>Gestión diaria</h3></div></div>
+        <div className="quick-actions">
+          <button onClick={() => goTo("clients")}><UserRoundPlus /><span><strong>Registrar clienta</strong><small>Crear y consultar fichas de clientas</small></span></button>
+          <button onClick={() => goTo("stock")}><PackagePlus /><span><strong>Gestionar stock</strong><small>Productos, cantidades y movimientos</small></span></button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ClientsPage() {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState<Client | null>(null);
+  const [form, setForm] = useState(emptyClient);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    const data = await api<Client[]>(`/clients?search=${encodeURIComponent(search)}`);
+    setClients(data);
+  }
+
+  useEffect(() => { load().catch(console.error); }, [search]);
+
+  function startCreate() {
+    setEditing(null);
+    setForm(emptyClient);
+    setError("");
+    setOpen(true);
+  }
+
+  function startEdit(client: Client) {
+    setEditing(client);
+    setForm({
+      name: client.name,
+      phone: client.phone || "",
+      email: client.email || "",
+      birthday: client.birthday ? client.birthday.slice(0, 10) : "",
+      allergies: client.allergies || "",
+      notes: client.notes || ""
+    });
+    setError("");
+    setOpen(true);
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+
+    try {
+      await api(editing ? `/clients/${editing.id}` : "/clients", {
+        method: editing ? "PUT" : "POST",
+        body: JSON.stringify(form)
+      });
+      setOpen(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar.");
+    }
+  }
+
+  async function remove(client: Client) {
+    if (!confirm(`¿Eliminar la ficha de ${client.name}?`)) return;
+    await api(`/clients/${client.id}`, { method: "DELETE" });
+    await load();
+  }
+
+  return (
+    <section className="page">
+      <div className="toolbar">
+        <div className="search-box"><Search size={18} /><input placeholder="Buscar por nombre, teléfono o correo" value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <button className="primary-button fit" onClick={startCreate}><Plus size={18} />Nueva clienta</button>
+      </div>
+
+      <div className="content-card table-card">
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>Alergias</th><th></th></tr></thead>
+            <tbody>
+              {clients.map(client => (
+                <tr key={client.id}>
+                  <td><strong>{client.name}</strong></td>
+                  <td>{client.phone || "—"}</td>
+                  <td>{client.email || "—"}</td>
+                  <td>{client.allergies || "—"}</td>
+                  <td className="actions">
+                    <button className="icon-button" onClick={() => startEdit(client)}><Pencil size={17} /></button>
+                    <button className="icon-button danger" onClick={() => remove(client)}><Trash2 size={17} /></button>
+                  </td>
+                </tr>
+              ))}
+              {!clients.length && <tr><td colSpan={5} className="empty">No hay clientas registradas.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {open && (
+        <Modal title={editing ? "Editar clienta" : "Nueva clienta"} onClose={() => setOpen(false)}>
+          <form onSubmit={save} className="form-grid">
+            <label className="wide">Nombre<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></label>
+            <label>Teléfono<input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></label>
+            <label>Correo<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>
+            <label>Fecha de nacimiento<input type="date" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></label>
+            <label>Alergias<input value={form.allergies} onChange={e => setForm({ ...form, allergies: e.target.value })} /></label>
+            <label className="wide">Notas<textarea rows={4} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>
+            {error && <div className="error-box wide">{error}</div>}
+            <div className="modal-actions wide"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancelar</button><button className="primary-button fit">Guardar</button></div>
+          </form>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function StockPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState<Product | null>(null);
+  const [form, setForm] = useState(emptyProduct);
+  const [open, setOpen] = useState(false);
+  const [movementProduct, setMovementProduct] = useState<Product | null>(null);
+  const [movement, setMovement] = useState({ type: "ENTRADA", quantity: 1, reason: "" });
+  const [error, setError] = useState("");
+
+  async function load() {
+    setProducts(await api<Product[]>(`/products?search=${encodeURIComponent(search)}`));
+  }
+
+  useEffect(() => { load().catch(console.error); }, [search]);
+
+  function startCreate() {
+    setEditing(null);
+    setForm(emptyProduct);
+    setError("");
+    setOpen(true);
+  }
+
+  function startEdit(product: Product) {
+    setEditing(product);
+    setForm({
+      name: product.name,
+      brand: product.brand || "",
+      category: product.category || "",
+      supplier: product.supplier || "",
+      sku: product.sku || "",
+      cost: Number(product.cost),
+      price: Number(product.price),
+      quantity: product.quantity,
+      minimum: product.minimum,
+      notes: product.notes || ""
+    });
+    setError("");
+    setOpen(true);
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      await api(editing ? `/products/${editing.id}` : "/products", {
+        method: editing ? "PUT" : "POST",
+        body: JSON.stringify(form)
+      });
+      setOpen(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar.");
+    }
+  }
+
+  async function saveMovement(event: FormEvent) {
+    event.preventDefault();
+    if (!movementProduct) return;
+    setError("");
+    try {
+      await api(`/products/${movementProduct.id}/movements`, {
+        method: "POST",
+        body: JSON.stringify(movement)
+      });
+      setMovementProduct(null);
+      setMovement({ type: "ENTRADA", quantity: 1, reason: "" });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo registrar el movimiento.");
+    }
+  }
+
+  async function remove(product: Product) {
+    if (!confirm(`¿Eliminar el producto ${product.name}?`)) return;
+    await api(`/products/${product.id}`, { method: "DELETE" });
+    await load();
+  }
+
+  const lowCount = useMemo(() => products.filter(p => p.quantity <= p.minimum).length, [products]);
+
+  return (
+    <section className="page">
+      <div className="toolbar">
+        <div className="search-box"><Search size={18} /><input placeholder="Buscar producto, marca, categoría o referencia" value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <button className="primary-button fit" onClick={startCreate}><Plus size={18} />Nuevo producto</button>
+      </div>
+
+      {lowCount > 0 && <div className="notice">{lowCount} producto{lowCount === 1 ? "" : "s"} necesita{lowCount === 1 ? "" : "n"} reposición.</div>}
+
+      <div className="product-grid">
+        {products.map(product => {
+          const low = product.quantity <= product.minimum;
+          return (
+            <article className={`product-card ${low ? "low" : ""}`} key={product.id}>
+              <div className="product-card-head">
+                <div><span>{product.category || "Sin categoría"}</span><h3>{product.name}</h3><small>{product.brand || "Sin marca"}{product.sku ? ` · ${product.sku}` : ""}</small></div>
+                <div className="actions">
+                  <button className="icon-button" onClick={() => startEdit(product)}><Pencil size={17} /></button>
+                  <button className="icon-button danger" onClick={() => remove(product)}><Trash2 size={17} /></button>
+                </div>
+              </div>
+
+              <div className="stock-number"><strong>{product.quantity}</strong><span>unidades</span></div>
+              <div className="product-meta"><span>Mínimo: {product.minimum}</span><span>Venta: {Number(product.price).toFixed(2)} €</span></div>
+              {low && <div className="low-label">Stock bajo</div>}
+              <button className="secondary-button full" onClick={() => { setError(""); setMovementProduct(product); }}>Registrar movimiento</button>
+            </article>
+          );
+        })}
+        {!products.length && <div className="content-card empty">No hay productos registrados.</div>}
+      </div>
+
+      {open && (
+        <Modal title={editing ? "Editar producto" : "Nuevo producto"} onClose={() => setOpen(false)}>
+          <form onSubmit={save} className="form-grid">
+            <label className="wide">Nombre<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></label>
+            <label>Marca<input value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} /></label>
+            <label>Categoría<input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} /></label>
+            <label>Proveedor<input value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} /></label>
+            <label>Referencia / SKU<input value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} /></label>
+            <label>Coste<input type="number" min="0" step="0.01" value={form.cost} onChange={e => setForm({ ...form, cost: Number(e.target.value) })} /></label>
+            <label>Precio de venta<input type="number" min="0" step="0.01" value={form.price} onChange={e => setForm({ ...form, price: Number(e.target.value) })} /></label>
+            <label>Cantidad<input type="number" min="0" value={form.quantity} onChange={e => setForm({ ...form, quantity: Number(e.target.value) })} /></label>
+            <label>Stock mínimo<input type="number" min="0" value={form.minimum} onChange={e => setForm({ ...form, minimum: Number(e.target.value) })} /></label>
+            <label className="wide">Notas<textarea rows={3} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>
+            {error && <div className="error-box wide">{error}</div>}
+            <div className="modal-actions wide"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancelar</button><button className="primary-button fit">Guardar</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {movementProduct && (
+        <Modal title={`Movimiento · ${movementProduct.name}`} onClose={() => setMovementProduct(null)}>
+          <form onSubmit={saveMovement} className="form-stack">
+            <label>Tipo<select value={movement.type} onChange={e => setMovement({ ...movement, type: e.target.value })}><option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option><option value="AJUSTE">Ajuste manual</option></select></label>
+            <label>Cantidad<input type="number" value={movement.quantity} onChange={e => setMovement({ ...movement, quantity: Number(e.target.value) })} required /></label>
+            <label>Motivo<textarea rows={3} value={movement.reason} onChange={e => setMovement({ ...movement, reason: e.target.value })} /></label>
+            {error && <div className="error-box">{error}</div>}
+            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setMovementProduct(null)}>Cancelar</button><button className="primary-button fit">Registrar</button></div>
+          </form>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="modal-layer">
+      <div className="modal-backdrop" onClick={onClose} />
+      <section className="modal">
+        <header><h3>{title}</h3><button className="icon-button" onClick={onClose}><X size={20} /></button></header>
+        {children}
+      </section>
+    </div>
+  );
+}
+
 export default App;
