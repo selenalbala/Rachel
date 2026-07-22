@@ -55,6 +55,28 @@ const wrap = (
   };
 };
 
+const obtenerParametro = (
+  value: string | string[] | undefined
+): string => {
+  if (Array.isArray(value)) {
+    if (!value[0]) {
+      throw new Error(
+        'Falta un parámetro obligatorio en la ruta.'
+      );
+    }
+
+    return value[0];
+  }
+
+  if (!value) {
+    throw new Error(
+      'Falta un parámetro obligatorio en la ruta.'
+    );
+  }
+
+  return value;
+};
+
 app.get(
   '/health',
   (_req: Request, res: Response) => {
@@ -397,37 +419,38 @@ app.patch(
       .nativeEnum(AppointmentStatus)
       .parse(req.body.status);
 
-    const id = req.params.id;
+    const id = obtenerParametro(
+      req.params.id
+    );
 
-    if (status === AppointmentStatus.COMPLETED) {
-      const appointment =
-        await prisma.appointment
-          .findUniqueOrThrow({
-            where: {
-              id
-            },
-            include: {
-              services: {
-                include: {
-                  service: {
-                    include: {
-                      serviceProducts: true
-                    }
-                  }
-                }
+    if (
+      status ===
+      AppointmentStatus.COMPLETED
+    ) {
+      const appointmentServices =
+        await prisma.appointmentService.findMany({
+          where: {
+            appointmentId: id
+          },
+          include: {
+            service: {
+              include: {
+                serviceProducts: true
               }
             }
-          });
+          }
+        });
 
       await prisma.$transaction(
         async transaction => {
           for (
-            const link of
-            appointment.services
+            const appointmentService of
+            appointmentServices
           ) {
             for (
               const usage of
-              link.service.serviceProducts
+              appointmentService.service
+                .serviceProducts
             ) {
               await transaction.product.update({
                 where: {
@@ -435,7 +458,8 @@ app.patch(
                 },
                 data: {
                   stock: {
-                    decrement: usage.quantity
+                    decrement:
+                      usage.quantity
                   }
                 }
               });
@@ -478,7 +502,9 @@ app.patch(
       });
     }
 
-    res.json({ ok: true });
+    res.json({
+      ok: true
+    });
   })
 );
 
@@ -527,10 +553,14 @@ app.patch(
       .nativeEnum(RequestStatus)
       .parse(req.body.status);
 
+    const id = obtenerParametro(
+      req.params.id
+    );
+
     const request =
       await prisma.clientRequest.update({
         where: {
-          id: req.params.id
+          id
         },
         data: {
           status
@@ -565,13 +595,17 @@ app.post(
       })
       .parse(req.body);
 
+    const productId = obtenerParametro(
+      req.params.id
+    );
+
     const result =
       await prisma.$transaction(
         async transaction => {
           const product =
             await transaction.product.update({
               where: {
-                id: req.params.id
+                id: productId
               },
               data: {
                 stock: {
