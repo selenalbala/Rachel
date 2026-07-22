@@ -8,8 +8,8 @@ type CalendarView = "day" | "week" | "month";
 const euro = (value: string | number) => `${Number(value).toFixed(2)} €`;
 const dateInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const emptyClient = { name: "", phone: "", email: "", birthday: "", allergies: "", notes: "", colorFormula: "" };
-const emptyEmployee = { name: "", specialty: "", phone: "", email: "", color: "#EC4899", active: true };
-const emptyService = { name: "", category: "", description: "", durationMin: 30, price: 0, color: "#F9A8D4", active: true };
+const emptyEmployee = { name: "", specialty: "", phone: "", email: "", color: "#B8A48A", active: true };
+const emptyService = { name: "", category: "", description: "", durationMin: 30, price: 0, color: "#E3D6C6", active: true };
 const emptyProduct = { name: "", brand: "", category: "", supplier: "", sku: "", unit: "UNIDAD" as ProductUnit, packageSize: 0, quantity: 0, minimum: 0, cost: 0, price: 0, notes: "", active: true };
 
 export default function App() {
