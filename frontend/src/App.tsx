@@ -33,12 +33,181 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
 }
 
 function Dashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
-  const [data, setData] = useState<any>(null); useEffect(() => { api("/dashboard").then(setData).catch(console.error); }, []);
-  if (!data) return <div className="page">Cargando resumen…</div>;
-  return <section className="page"><div className="welcome"><div><h1>¡Hola! 👋</h1><p>{new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</p></div><button className="primary-button fit" onClick={() => onNavigate("agenda")}><Plus />Nueva cita</button></div><div className="stats-grid four"><Stat label="Citas hoy" value={data.todayAppointments.length} /><Stat label="Clientas" value={data.clients} /><Stat label="Stock bajo" value={data.lowStock} warn={data.lowStock > 0} /><Stat label="Facturación hoy" value={euro(data.todayRevenue)} /></div><div className="dashboard-grid"><div className="content-card"><div className="section-heading"><div><p className="eyebrow">Agenda</p><h3>Citas de hoy</h3></div><button className="link-button" onClick={() => onNavigate("agenda")}>Ver agenda</button></div><DayTimeline appointments={data.todayAppointments} /></div><aside className="side-stack">{data.nextAppointment && <div className="content-card accent-card"><p className="eyebrow">Próxima cita</p><h3>{data.nextAppointment.client.name}</h3><p>{data.nextAppointment.services.map((s: any) => s.serviceName).join(" + ")}</p><strong>{new Date(data.nextAppointment.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })} · {data.nextAppointment.employee.name}</strong></div>}<div className="content-card"><div className="section-heading"><h3>Stock bajo</h3><button className="link-button" onClick={() => onNavigate("stock")}>Ver todo</button></div>{data.lowProducts.map((p: Product) => <div className="mini-row" key={p.id}><span>{p.name}</span><strong>{Number(p.quantity)} {unitLabel(p.unit)}</strong></div>)}{!data.lowProducts.length && <p className="muted">Todo el stock está correcto.</p>}</div><div className="content-card"><p className="eyebrow">Este mes</p><h2>{euro(data.monthRevenue)}</h2><p className="muted">Facturación registrada</p></div></aside></div></section>;
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api<any>("/dashboard")
+      .then(result => {
+        const appointments = Array.isArray(result?.todayAppointments)
+          ? result.todayAppointments
+          : Array.isArray(result?.appointments)
+            ? result.appointments
+            : [];
+
+        const lowProducts = Array.isArray(result?.lowProducts)
+          ? result.lowProducts
+          : Array.isArray(result?.lowStock)
+            ? result.lowStock
+            : [];
+
+        const lowStockCount =
+          typeof result?.lowStock === "number"
+            ? result.lowStock
+            : typeof result?.stats?.lowStock === "number"
+              ? result.stats.lowStock
+              : lowProducts.length;
+
+        const revenueToday =
+          result?.todayRevenue ??
+          (typeof result?.stats?.revenueTodayCents === "number"
+            ? result.stats.revenueTodayCents / 100
+            : 0);
+
+        setData({
+          todayAppointments: appointments,
+          lowProducts,
+          nextAppointment: result?.nextAppointment ?? appointments[0] ?? null,
+          clients: Number(result?.clients ?? result?.stats?.clients ?? 0),
+          lowStock: Number(lowStockCount),
+          todayRevenue: Number(revenueToday),
+          monthRevenue: Number(result?.monthRevenue ?? 0)
+        });
+      })
+      .catch(err => {
+        console.error(err);
+        setError(err instanceof Error ? err.message : "No se pudo cargar el resumen.");
+      });
+  }, []);
+
+  if (error) {
+    return <section className="page"><div className="error-box">{error}</div></section>;
+  }
+
+  if (!data) {
+    return <div className="page">Cargando resumen…</div>;
+  }
+
+  const appointments: Appointment[] = Array.isArray(data.todayAppointments) ? data.todayAppointments : [];
+  const lowProducts: Product[] = Array.isArray(data.lowProducts) ? data.lowProducts : [];
+  const nextAppointment = data.nextAppointment;
+
+  return (
+    <section className="page">
+      <div className="welcome">
+        <div>
+          <h1>¡Hola! 👋</h1>
+          <p>{new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</p>
+        </div>
+        <button className="primary-button fit" onClick={() => onNavigate("agenda")}><Plus />Nueva cita</button>
+      </div>
+
+      <div className="stats-grid four">
+        <Stat label="Citas hoy" value={appointments.length} />
+        <Stat label="Clientas" value={data.clients} />
+        <Stat label="Stock bajo" value={data.lowStock} warn={data.lowStock > 0} />
+        <Stat label="Facturación hoy" value={euro(data.todayRevenue)} />
+      </div>
+
+      <div className="dashboard-grid">
+        <div className="content-card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Agenda</p>
+              <h3>Citas de hoy</h3>
+            </div>
+            <button className="link-button" onClick={() => onNavigate("agenda")}>Ver agenda</button>
+          </div>
+          <DayTimeline appointments={appointments} />
+        </div>
+
+        <aside className="side-stack">
+          {nextAppointment && (
+            <div className="content-card accent-card">
+              <p className="eyebrow">Próxima cita</p>
+              <h3>{nextAppointment.client?.name ?? "Clienta"}</h3>
+              <p>
+                {Array.isArray(nextAppointment.services)
+                  ? nextAppointment.services
+                      .map((service: any) => service?.serviceName ?? service?.service?.name ?? "")
+                      .filter(Boolean)
+                      .join(" + ") || "Sin servicios"
+                  : "Sin servicios"}
+              </p>
+              <strong>
+                {nextAppointment.startsAt
+                  ? new Date(nextAppointment.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+                  : "Sin hora"}
+                {" · "}
+                {nextAppointment.employee?.name ?? "Sin empleada"}
+              </strong>
+            </div>
+          )}
+
+          <div className="content-card">
+            <div className="section-heading">
+              <h3>Stock bajo</h3>
+              <button className="link-button" onClick={() => onNavigate("stock")}>Ver todo</button>
+            </div>
+            {lowProducts.map((product: Product) => (
+              <div className="mini-row" key={product.id}>
+                <span>{product.name}</span>
+                <strong>{Number(product.quantity ?? 0)} {unitLabel(product.unit)}</strong>
+              </div>
+            ))}
+            {lowProducts.length === 0 && <p className="muted">Todo el stock está correcto.</p>}
+          </div>
+
+          <div className="content-card">
+            <p className="eyebrow">Este mes</p>
+            <h2>{euro(data.monthRevenue)}</h2>
+            <p className="muted">Facturación registrada</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
 }
+
 function Stat({ label, value, warn }: { label: string; value: string | number; warn?: boolean }) { return <article className={`stat-card ${warn ? "warning" : ""}`}><span>{label}</span><strong>{value}</strong></article>; }
-function DayTimeline({ appointments }: { appointments: Appointment[] }) { return <div className="timeline">{appointments.map(a => <article className="timeline-item" key={a.id} style={{ borderLeftColor: a.employee.color }}><time>{new Date(a.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</time><div><strong>{a.client.name}</strong><span>{a.services.map(s => s.serviceName).join(" + ")}</span><small>{a.employee.name} · {euro(a.total)}</small></div><span className={`status ${a.status.toLowerCase()}`}>{a.status.replaceAll("_", " ")}</span></article>)}{!appointments.length && <div className="empty">No hay citas para hoy.</div>}</div>; }
+function DayTimeline({ appointments = [] }: { appointments?: Appointment[] }) {
+  const safeAppointments = Array.isArray(appointments) ? appointments : [];
+
+  return (
+    <div className="timeline">
+      {safeAppointments.map(appointment => {
+        const services = Array.isArray(appointment.services) ? appointment.services : [];
+        const serviceNames = services
+          .map((service: any) => service?.serviceName ?? service?.service?.name ?? "")
+          .filter(Boolean)
+          .join(" + ");
+
+        return (
+          <article
+            className="timeline-item"
+            key={appointment.id}
+            style={{ borderLeftColor: appointment.employee?.color ?? "#B8A48A" }}
+          >
+            <time>
+              {appointment.startsAt
+                ? new Date(appointment.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+                : "--:--"}
+            </time>
+            <div>
+              <strong>{appointment.client?.name ?? "Clienta"}</strong>
+              <span>{serviceNames || "Sin servicios"}</span>
+              <small>{appointment.employee?.name ?? "Sin empleada"} · {euro(appointment.total ?? 0)}</small>
+            </div>
+            <span className={`status ${String(appointment.status ?? "PENDIENTE").toLowerCase()}`}>
+              {String(appointment.status ?? "PENDIENTE").replaceAll("_", " ")}
+            </span>
+          </article>
+        );
+      })}
+      {safeAppointments.length === 0 && <div className="empty">No hay citas para hoy.</div>}
+    </div>
+  );
+}
 
 function Agenda() {
   const [view, setView] = useState<CalendarView>("week"); const [cursor, setCursor] = useState(new Date()); const [appointments, setAppointments] = useState<Appointment[]>([]); const [clients, setClients] = useState<Client[]>([]); const [employees, setEmployees] = useState<Employee[]>([]); const [services, setServices] = useState<Service[]>([]); const [products, setProducts] = useState<Product[]>([]); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<Appointment | null>(null);
