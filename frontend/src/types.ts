@@ -1,40 +1,10 @@
-export type Client = {
-  id: string;
-  name: string;
-  phone: string | null;
-  email: string | null;
-  birthday: string | null;
-  allergies: string | null;
-  notes: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StockMovement = {
-  id: string;
-  type: "ENTRADA" | "SALIDA" | "AJUSTE";
-  quantity: number;
-  reason: string | null;
-  createdAt: string;
-};
-
-export type Product = {
-  id: string;
-  name: string;
-  brand: string | null;
-  category: string | null;
-  supplier: string | null;
-  sku: string | null;
-  cost: string | number;
-  price: string | number;
-  quantity: number;
-  minimum: number;
-  notes: string | null;
-  movements?: StockMovement[];
-};
-
-export type User = {
-  id: string;
-  name: string;
-  email: string;
-};
+export type User = { id: string; name: string; email: string };
+export type Client = { id: string; name: string; phone?: string | null; email?: string | null; birthday?: string | null; allergies?: string | null; notes?: string | null; colorFormula?: string | null; appointments?: Appointment[] };
+export type Employee = { id: string; name: string; specialty?: string | null; phone?: string | null; email?: string | null; color: string; active: boolean };
+export type Service = { id: string; name: string; category?: string | null; description?: string | null; durationMin: number; price: string | number; color: string; active: boolean };
+export type ProductUnit = "UNIDAD" | "GRAMO" | "MILILITRO" | "LITRO" | "CAJA";
+export type Movement = { id: string; type: string; quantity: string | number; previousStock: string | number; resultingStock: string | number; reason?: string | null; createdAt: string };
+export type Product = { id: string; name: string; brand?: string | null; category?: string | null; supplier?: string | null; sku?: string | null; unit: ProductUnit; packageSize?: string | number | null; quantity: string | number; minimum: string | number; cost: string | number; price: string | number; notes?: string | null; active: boolean; movements?: Movement[] };
+export type AppointmentService = { id: string; serviceId?: string | null; serviceName: string; durationMin: number; unitPrice: string | number; discount: string | number; finalPrice: string | number };
+export type AppointmentProduct = { id: string; productId: string; quantity: string | number; product: Product };
+export type Appointment = { id: string; clientId: string; employeeId: string; startsAt: string; endsAt: string; status: string; notes?: string | null; total: string | number; paid: boolean; client: Client; employee: Employee; services: AppointmentService[]; products: AppointmentProduct[] };

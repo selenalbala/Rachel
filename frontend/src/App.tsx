@@ -1,448 +1,87 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import {
-  Boxes,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  PackagePlus,
-  Pencil,
-  Plus,
-  Search,
-  Trash2,
-  UserRoundPlus,
-  Users,
-  X
-} from "lucide-react";
+import React, { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { api, getToken, setToken } from "./api";
-import type { Client, Product, User } from "./types";
+import type { Appointment, Client, Employee, Product, ProductUnit, Service, User } from "./types";
+import { CalendarDays, Boxes, LayoutDashboard, LogOut, Menu, Plus, Scissors, Search, Trash2, Users, UserRoundCog, X, Pencil, CheckCircle2, ChevronLeft, ChevronRight } from "lucide-react";
 
-type Page = "dashboard" | "clients" | "stock";
+type Page = "dashboard" | "agenda" | "clients" | "services" | "stock" | "employees";
+type CalendarView = "day" | "week" | "month";
+const euro = (value: string | number) => `${Number(value).toFixed(2)} €`;
+const dateInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+const emptyClient = { name: "", phone: "", email: "", birthday: "", allergies: "", notes: "", colorFormula: "" };
+const emptyEmployee = { name: "", specialty: "", phone: "", email: "", color: "#EC4899", active: true };
+const emptyService = { name: "", category: "", description: "", durationMin: 30, price: 0, color: "#F9A8D4", active: true };
+const emptyProduct = { name: "", brand: "", category: "", supplier: "", sku: "", unit: "UNIDAD" as ProductUnit, packageSize: 0, quantity: 0, minimum: 0, cost: 0, price: 0, notes: "", active: true };
 
-const emptyClient = {
-  name: "",
-  phone: "",
-  email: "",
-  birthday: "",
-  allergies: "",
-  notes: ""
-};
-
-const emptyProduct = {
-  name: "",
-  brand: "",
-  category: "",
-  supplier: "",
-  sku: "",
-  cost: 0,
-  price: 0,
-  quantity: 0,
-  minimum: 0,
-  notes: ""
-};
-
-function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loadingSession, setLoadingSession] = useState(true);
-
-  useEffect(() => {
-    if (!getToken()) {
-      setLoadingSession(false);
-      return;
-    }
-
-    api<User>("/auth/me")
-      .then(setUser)
-      .catch(() => setToken(null))
-      .finally(() => setLoadingSession(false));
-  }, []);
-
-  if (loadingSession) return <div className="screen-center">Cargando Rachel Studio…</div>;
+export default function App() {
+  const [user, setUser] = useState<User | null>(null); const [loading, setLoading] = useState(true);
+  useEffect(() => { if (!getToken()) { setLoading(false); return; } api<User>("/auth/me").then(setUser).catch(() => setToken(null)).finally(() => setLoading(false)); }, []);
+  if (loading) return <div className="screen-center">Cargando Rachel Studio…</div>;
   if (!user) return <Login onLogin={setUser} />;
-
   return <Workspace user={user} onLogout={() => { setToken(null); setUser(null); }} />;
 }
 
-function Login({ onLogin }: { onLogin: (user: User) => void }) {
-  const [email, setEmail] = useState("admin@rachelstudio.es");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setSending(true);
-
-    try {
-      const result = await api<{ token: string; user: User }>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password })
-      });
-      setToken(result.token);
-      onLogin(result.user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo iniciar sesión.");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <main className="login-page">
-      <section className="login-panel">
-        <div className="brand-mark">RS</div>
-        <p className="eyebrow">Gestión profesional</p>
-        <h1>Rachel Studio</h1>
-        <p className="muted">Accede al panel de gestión de clientas y almacén.</p>
-
-        <form onSubmit={submit} className="form-stack">
-          <label>Correo<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-          <label>Contraseña<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
-          {error && <div className="error-box">{error}</div>}
-          <button className="primary-button" disabled={sending}>{sending ? "Entrando…" : "Iniciar sesión"}</button>
-        </form>
-      </section>
-    </main>
-  );
+function Login({ onLogin }: { onLogin: (u: User) => void }) {
+  const [email, setEmail] = useState("admin@rachelstudio.es"); const [password, setPassword] = useState(""); const [error, setError] = useState(""); const [sending, setSending] = useState(false);
+  async function submit(e: FormEvent) { e.preventDefault(); setSending(true); setError(""); try { const result = await api<{ token: string; user: User }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); setToken(result.token); onLogin(result.user); } catch (err) { setError(err instanceof Error ? err.message : "No se pudo iniciar sesión."); } finally { setSending(false); } }
+  return <main className="login-page"><section className="login-panel"><div className="brand-mark">RS</div><p className="eyebrow">Gestión profesional</p><h1>Rachel Studio</h1><p className="muted">Agenda, clientas, servicios y control real de stock.</p><form onSubmit={submit} className="form-stack"><label>Correo<input type="email" value={email} onChange={e => setEmail(e.target.value)} /></label><label>Contraseña<input type="password" value={password} onChange={e => setPassword(e.target.value)} /></label>{error && <div className="error-box">{error}</div>}<button className="primary-button" disabled={sending}>{sending ? "Entrando…" : "Iniciar sesión"}</button></form></section></main>;
 }
 
 function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const [page, setPage] = useState<Page>("dashboard");
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  const title = page === "dashboard" ? "Resumen" : page === "clients" ? "Clientas" : "Stock";
-
-  function navigate(next: Page) {
-    setPage(next);
-    setMobileOpen(false);
-  }
-
-  return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
-        <div className="sidebar-head">
-          <div className="brand-small">RS</div>
-          <div><strong>Rachel Studio</strong><span>Panel de gestión</span></div>
-          <button className="icon-button mobile-only" onClick={() => setMobileOpen(false)}><X size={20} /></button>
-        </div>
-
-        <nav>
-          <button className={page === "dashboard" ? "active" : ""} onClick={() => navigate("dashboard")}><LayoutDashboard size={19} />Resumen</button>
-          <button className={page === "clients" ? "active" : ""} onClick={() => navigate("clients")}><Users size={19} />Clientas</button>
-          <button className={page === "stock" ? "active" : ""} onClick={() => navigate("stock")}><Boxes size={19} />Stock</button>
-        </nav>
-
-        <div className="sidebar-user">
-          <div><strong>{user.name}</strong><span>{user.email}</span></div>
-          <button className="icon-button" title="Cerrar sesión" onClick={onLogout}><LogOut size={18} /></button>
-        </div>
-      </aside>
-
-      {mobileOpen && <div className="overlay" onClick={() => setMobileOpen(false)} />}
-
-      <main className="main-content">
-        <header className="topbar">
-          <button className="icon-button mobile-only" onClick={() => setMobileOpen(true)}><Menu /></button>
-          <div><p className="eyebrow">Rachel Studio</p><h2>{title}</h2></div>
-        </header>
-
-        {page === "dashboard" && <Dashboard goTo={navigate} />}
-        {page === "clients" && <ClientsPage />}
-        {page === "stock" && <StockPage />}
-      </main>
-    </div>
-  );
+  const [page, setPage] = useState<Page>("dashboard"); const [mobile, setMobile] = useState(false);
+  const items: [Page, string, ReactNode][] = [["dashboard", "Inicio", <LayoutDashboard />], ["agenda", "Agenda", <CalendarDays />], ["clients", "Clientas", <Users />], ["services", "Servicios", <Scissors />], ["stock", "Stock", <Boxes />], ["employees", "Empleadas", <UserRoundCog />]];
+  return <div className="app-shell"><aside className={`sidebar ${mobile ? "open" : ""}`}><div className="sidebar-head"><div className="brand-small">RS</div><div><strong>Rachel Studio</strong><span>Salón de belleza</span></div><button className="icon-button mobile-only" onClick={() => setMobile(false)}><X /></button></div><nav>{items.map(([id, label, icon]) => <button key={id} className={page === id ? "active" : ""} onClick={() => { setPage(id); setMobile(false); }}>{icon}{label}</button>)}</nav><div className="sidebar-user"><div><strong>{user.name}</strong><span>{user.email}</span></div><button className="icon-button" onClick={onLogout}><LogOut /></button></div></aside>{mobile && <div className="overlay" onClick={() => setMobile(false)} />}<main className="main-content"><header className="topbar"><button className="icon-button mobile-only" onClick={() => setMobile(true)}><Menu /></button><div><p className="eyebrow">Rachel Studio</p><h2>{items.find(x => x[0] === page)?.[1]}</h2></div></header>{page === "dashboard" && <Dashboard onNavigate={setPage} />}{page === "agenda" && <Agenda />}{page === "clients" && <Clients />}{page === "services" && <Services />}{page === "stock" && <Stock />}{page === "employees" && <Employees />}</main></div>;
 }
 
-function Dashboard({ goTo }: { goTo: (page: Page) => void }) {
-  const [stats, setStats] = useState({ clients: 0, products: 0, lowStock: 0 });
+function Dashboard({ onNavigate }: { onNavigate: (p: Page) => void }) {
+  const [data, setData] = useState<any>(null); useEffect(() => { api("/dashboard").then(setData).catch(console.error); }, []);
+  if (!data) return <div className="page">Cargando resumen…</div>;
+  return <section className="page"><div className="welcome"><div><h1>¡Hola! 👋</h1><p>{new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</p></div><button className="primary-button fit" onClick={() => onNavigate("agenda")}><Plus />Nueva cita</button></div><div className="stats-grid four"><Stat label="Citas hoy" value={data.todayAppointments.length} /><Stat label="Clientas" value={data.clients} /><Stat label="Stock bajo" value={data.lowStock} warn={data.lowStock > 0} /><Stat label="Facturación hoy" value={euro(data.todayRevenue)} /></div><div className="dashboard-grid"><div className="content-card"><div className="section-heading"><div><p className="eyebrow">Agenda</p><h3>Citas de hoy</h3></div><button className="link-button" onClick={() => onNavigate("agenda")}>Ver agenda</button></div><DayTimeline appointments={data.todayAppointments} /></div><aside className="side-stack">{data.nextAppointment && <div className="content-card accent-card"><p className="eyebrow">Próxima cita</p><h3>{data.nextAppointment.client.name}</h3><p>{data.nextAppointment.services.map((s: any) => s.serviceName).join(" + ")}</p><strong>{new Date(data.nextAppointment.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })} · {data.nextAppointment.employee.name}</strong></div>}<div className="content-card"><div className="section-heading"><h3>Stock bajo</h3><button className="link-button" onClick={() => onNavigate("stock")}>Ver todo</button></div>{data.lowProducts.map((p: Product) => <div className="mini-row" key={p.id}><span>{p.name}</span><strong>{Number(p.quantity)} {unitLabel(p.unit)}</strong></div>)}{!data.lowProducts.length && <p className="muted">Todo el stock está correcto.</p>}</div><div className="content-card"><p className="eyebrow">Este mes</p><h2>{euro(data.monthRevenue)}</h2><p className="muted">Facturación registrada</p></div></aside></div></section>;
+}
+function Stat({ label, value, warn }: { label: string; value: string | number; warn?: boolean }) { return <article className={`stat-card ${warn ? "warning" : ""}`}><span>{label}</span><strong>{value}</strong></article>; }
+function DayTimeline({ appointments }: { appointments: Appointment[] }) { return <div className="timeline">{appointments.map(a => <article className="timeline-item" key={a.id} style={{ borderLeftColor: a.employee.color }}><time>{new Date(a.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</time><div><strong>{a.client.name}</strong><span>{a.services.map(s => s.serviceName).join(" + ")}</span><small>{a.employee.name} · {euro(a.total)}</small></div><span className={`status ${a.status.toLowerCase()}`}>{a.status.replaceAll("_", " ")}</span></article>)}{!appointments.length && <div className="empty">No hay citas para hoy.</div>}</div>; }
 
-  useEffect(() => {
-    api<typeof stats>("/dashboard").then(setStats).catch(console.error);
-  }, []);
-
-  return (
-    <section className="page">
-      <div className="stats-grid">
-        <article className="stat-card"><span>Clientas registradas</span><strong>{stats.clients}</strong><Users /></article>
-        <article className="stat-card"><span>Productos registrados</span><strong>{stats.products}</strong><Boxes /></article>
-        <article className={`stat-card ${stats.lowStock > 0 ? "warning" : ""}`}><span>Productos bajo mínimo</span><strong>{stats.lowStock}</strong><PackagePlus /></article>
-      </div>
-
-      <div className="content-card">
-        <div className="section-heading"><div><p className="eyebrow">Acciones rápidas</p><h3>Gestión diaria</h3></div></div>
-        <div className="quick-actions">
-          <button onClick={() => goTo("clients")}><UserRoundPlus /><span><strong>Registrar clienta</strong><small>Crear y consultar fichas de clientas</small></span></button>
-          <button onClick={() => goTo("stock")}><PackagePlus /><span><strong>Gestionar stock</strong><small>Productos, cantidades y movimientos</small></span></button>
-        </div>
-      </div>
-    </section>
-  );
+function Agenda() {
+  const [view, setView] = useState<CalendarView>("week"); const [cursor, setCursor] = useState(new Date()); const [appointments, setAppointments] = useState<Appointment[]>([]); const [clients, setClients] = useState<Client[]>([]); const [employees, setEmployees] = useState<Employee[]>([]); const [services, setServices] = useState<Service[]>([]); const [products, setProducts] = useState<Product[]>([]); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<Appointment | null>(null);
+  const range = useMemo(() => calendarRange(cursor, view), [cursor, view]);
+  async function load() { const [a, c, e, s, p] = await Promise.all([api<Appointment[]>(`/appointments?from=${range.from.toISOString()}&to=${range.to.toISOString()}`), api<Client[]>("/clients"), api<Employee[]>("/employees"), api<Service[]>("/services"), api<Product[]>("/products")]); setAppointments(a); setClients(c); setEmployees(e.filter(x => x.active)); setServices(s.filter(x => x.active)); setProducts(p.filter(x => x.active)); }
+  useEffect(() => { load().catch(console.error); }, [range.from.getTime(), range.to.getTime()]);
+  function move(delta: number) { const next = new Date(cursor); if (view === "day") next.setDate(next.getDate() + delta); else if (view === "week") next.setDate(next.getDate() + delta * 7); else next.setMonth(next.getMonth() + delta); setCursor(next); }
+  return <section className="page"><div className="calendar-toolbar"><div className="segmented">{(["day", "week", "month"] as CalendarView[]).map(v => <button className={view === v ? "active" : ""} onClick={() => setView(v)} key={v}>{v === "day" ? "Día" : v === "week" ? "Semana" : "Mes"}</button>)}</div><div className="calendar-nav"><button className="icon-button" onClick={() => move(-1)}><ChevronLeft /></button><button className="secondary-button" onClick={() => setCursor(new Date())}>Hoy</button><button className="icon-button" onClick={() => move(1)}><ChevronRight /></button></div><button className="primary-button fit" onClick={() => { setEditing(null); setOpen(true); }}><Plus />Nueva cita</button></div><Calendar appointments={appointments} employees={employees} view={view} cursor={cursor} onEdit={a => { setEditing(a); setOpen(true); }} />{open && <AppointmentModal appointment={editing} clients={clients} employees={employees} services={services} products={products} onClose={() => setOpen(false)} onSaved={async () => { setOpen(false); await load(); }} />}</section>;
 }
 
-function ClientsPage() {
-  const [clients, setClients] = useState<Client[]>([]);
-  const [search, setSearch] = useState("");
-  const [editing, setEditing] = useState<Client | null>(null);
-  const [form, setForm] = useState(emptyClient);
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState("");
-
-  async function load() {
-    const data = await api<Client[]>(`/clients?search=${encodeURIComponent(search)}`);
-    setClients(data);
-  }
-
-  useEffect(() => { load().catch(console.error); }, [search]);
-
-  function startCreate() {
-    setEditing(null);
-    setForm(emptyClient);
-    setError("");
-    setOpen(true);
-  }
-
-  function startEdit(client: Client) {
-    setEditing(client);
-    setForm({
-      name: client.name,
-      phone: client.phone || "",
-      email: client.email || "",
-      birthday: client.birthday ? client.birthday.slice(0, 10) : "",
-      allergies: client.allergies || "",
-      notes: client.notes || ""
-    });
-    setError("");
-    setOpen(true);
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-
-    try {
-      await api(editing ? `/clients/${editing.id}` : "/clients", {
-        method: editing ? "PUT" : "POST",
-        body: JSON.stringify(form)
-      });
-      setOpen(false);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar.");
-    }
-  }
-
-  async function remove(client: Client) {
-    if (!confirm(`¿Eliminar la ficha de ${client.name}?`)) return;
-    await api(`/clients/${client.id}`, { method: "DELETE" });
-    await load();
-  }
-
-  return (
-    <section className="page">
-      <div className="toolbar">
-        <div className="search-box"><Search size={18} /><input placeholder="Buscar por nombre, teléfono o correo" value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <button className="primary-button fit" onClick={startCreate}><Plus size={18} />Nueva clienta</button>
-      </div>
-
-      <div className="content-card table-card">
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>Alergias</th><th></th></tr></thead>
-            <tbody>
-              {clients.map(client => (
-                <tr key={client.id}>
-                  <td><strong>{client.name}</strong></td>
-                  <td>{client.phone || "—"}</td>
-                  <td>{client.email || "—"}</td>
-                  <td>{client.allergies || "—"}</td>
-                  <td className="actions">
-                    <button className="icon-button" onClick={() => startEdit(client)}><Pencil size={17} /></button>
-                    <button className="icon-button danger" onClick={() => remove(client)}><Trash2 size={17} /></button>
-                  </td>
-                </tr>
-              ))}
-              {!clients.length && <tr><td colSpan={5} className="empty">No hay clientas registradas.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {open && (
-        <Modal title={editing ? "Editar clienta" : "Nueva clienta"} onClose={() => setOpen(false)}>
-          <form onSubmit={save} className="form-grid">
-            <label className="wide">Nombre<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></label>
-            <label>Teléfono<input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></label>
-            <label>Correo<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>
-            <label>Fecha de nacimiento<input type="date" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></label>
-            <label>Alergias<input value={form.allergies} onChange={e => setForm({ ...form, allergies: e.target.value })} /></label>
-            <label className="wide">Notas<textarea rows={4} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>
-            {error && <div className="error-box wide">{error}</div>}
-            <div className="modal-actions wide"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancelar</button><button className="primary-button fit">Guardar</button></div>
-          </form>
-        </Modal>
-      )}
-    </section>
-  );
+function Calendar({ appointments, employees, view, cursor, onEdit }: { appointments: Appointment[]; employees: Employee[]; view: CalendarView; cursor: Date; onEdit: (a: Appointment) => void }) {
+  if (view === "month") { const start = new Date(cursor.getFullYear(), cursor.getMonth(), 1); const gridStart = new Date(start); gridStart.setDate(start.getDate() - ((start.getDay() + 6) % 7)); return <div className="month-grid">{Array.from({ length: 42 }, (_, i) => { const day = new Date(gridStart); day.setDate(gridStart.getDate() + i); const items = appointments.filter(a => sameDay(new Date(a.startsAt), day)); return <div className={`month-day ${day.getMonth() !== cursor.getMonth() ? "muted-day" : ""}`} key={i}><strong>{day.getDate()}</strong>{items.slice(0, 4).map(a => <button key={a.id} style={{ borderLeftColor: a.employee.color }} onClick={() => onEdit(a)}>{new Date(a.startsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })} {a.client.name}</button>)}{items.length > 4 && <small>+{items.length - 4} más</small>}</div>; })}</div>; }
+  const days = view === "day" ? [cursor] : Array.from({ length: 7 }, (_, i) => { const d = startOfWeek(cursor); d.setDate(d.getDate() + i); return d; });
+  return <div className="week-calendar"><div className="calendar-head"><span />{days.map(d => <strong key={d.toISOString()}>{d.toLocaleDateString("es-ES", { weekday: "short", day: "numeric" })}</strong>)}</div><div className="calendar-body"><div className="hours">{Array.from({ length: 13 }, (_, i) => <span key={i}>{String(i + 8).padStart(2, "0")}:00</span>)}</div>{days.map(day => <div className="day-column" key={day.toISOString()}>{appointments.filter(a => sameDay(new Date(a.startsAt), day)).map(a => { const start = new Date(a.startsAt); const end = new Date(a.endsAt); const top = ((start.getHours() + start.getMinutes() / 60) - 8) * 64; const height = Math.max(40, (end.getTime() - start.getTime()) / 3600000 * 64); return <button className="appointment-block" key={a.id} onClick={() => onEdit(a)} style={{ top, height, background: `${a.employee.color}25`, borderColor: a.employee.color }}><strong>{a.client.name}</strong><span>{a.services.map(s => s.serviceName).join(" + ")}</span><small>{start.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })} · {a.employee.name}</small></button>; })}</div>)}</div></div>;
 }
 
-function StockPage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [search, setSearch] = useState("");
-  const [editing, setEditing] = useState<Product | null>(null);
-  const [form, setForm] = useState(emptyProduct);
-  const [open, setOpen] = useState(false);
-  const [movementProduct, setMovementProduct] = useState<Product | null>(null);
-  const [movement, setMovement] = useState({ type: "ENTRADA", quantity: 1, reason: "" });
-  const [error, setError] = useState("");
-
-  async function load() {
-    setProducts(await api<Product[]>(`/products?search=${encodeURIComponent(search)}`));
-  }
-
-  useEffect(() => { load().catch(console.error); }, [search]);
-
-  function startCreate() {
-    setEditing(null);
-    setForm(emptyProduct);
-    setError("");
-    setOpen(true);
-  }
-
-  function startEdit(product: Product) {
-    setEditing(product);
-    setForm({
-      name: product.name,
-      brand: product.brand || "",
-      category: product.category || "",
-      supplier: product.supplier || "",
-      sku: product.sku || "",
-      cost: Number(product.cost),
-      price: Number(product.price),
-      quantity: product.quantity,
-      minimum: product.minimum,
-      notes: product.notes || ""
-    });
-    setError("");
-    setOpen(true);
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    try {
-      await api(editing ? `/products/${editing.id}` : "/products", {
-        method: editing ? "PUT" : "POST",
-        body: JSON.stringify(form)
-      });
-      setOpen(false);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar.");
-    }
-  }
-
-  async function saveMovement(event: FormEvent) {
-    event.preventDefault();
-    if (!movementProduct) return;
-    setError("");
-    try {
-      await api(`/products/${movementProduct.id}/movements`, {
-        method: "POST",
-        body: JSON.stringify(movement)
-      });
-      setMovementProduct(null);
-      setMovement({ type: "ENTRADA", quantity: 1, reason: "" });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo registrar el movimiento.");
-    }
-  }
-
-  async function remove(product: Product) {
-    if (!confirm(`¿Eliminar el producto ${product.name}?`)) return;
-    await api(`/products/${product.id}`, { method: "DELETE" });
-    await load();
-  }
-
-  const lowCount = useMemo(() => products.filter(p => p.quantity <= p.minimum).length, [products]);
-
-  return (
-    <section className="page">
-      <div className="toolbar">
-        <div className="search-box"><Search size={18} /><input placeholder="Buscar producto, marca, categoría o referencia" value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <button className="primary-button fit" onClick={startCreate}><Plus size={18} />Nuevo producto</button>
-      </div>
-
-      {lowCount > 0 && <div className="notice">{lowCount} producto{lowCount === 1 ? "" : "s"} necesita{lowCount === 1 ? "" : "n"} reposición.</div>}
-
-      <div className="product-grid">
-        {products.map(product => {
-          const low = product.quantity <= product.minimum;
-          return (
-            <article className={`product-card ${low ? "low" : ""}`} key={product.id}>
-              <div className="product-card-head">
-                <div><span>{product.category || "Sin categoría"}</span><h3>{product.name}</h3><small>{product.brand || "Sin marca"}{product.sku ? ` · ${product.sku}` : ""}</small></div>
-                <div className="actions">
-                  <button className="icon-button" onClick={() => startEdit(product)}><Pencil size={17} /></button>
-                  <button className="icon-button danger" onClick={() => remove(product)}><Trash2 size={17} /></button>
-                </div>
-              </div>
-
-              <div className="stock-number"><strong>{product.quantity}</strong><span>unidades</span></div>
-              <div className="product-meta"><span>Mínimo: {product.minimum}</span><span>Venta: {Number(product.price).toFixed(2)} €</span></div>
-              {low && <div className="low-label">Stock bajo</div>}
-              <button className="secondary-button full" onClick={() => { setError(""); setMovementProduct(product); }}>Registrar movimiento</button>
-            </article>
-          );
-        })}
-        {!products.length && <div className="content-card empty">No hay productos registrados.</div>}
-      </div>
-
-      {open && (
-        <Modal title={editing ? "Editar producto" : "Nuevo producto"} onClose={() => setOpen(false)}>
-          <form onSubmit={save} className="form-grid">
-            <label className="wide">Nombre<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></label>
-            <label>Marca<input value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} /></label>
-            <label>Categoría<input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} /></label>
-            <label>Proveedor<input value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} /></label>
-            <label>Referencia / SKU<input value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} /></label>
-            <label>Coste<input type="number" min="0" step="0.01" value={form.cost} onChange={e => setForm({ ...form, cost: Number(e.target.value) })} /></label>
-            <label>Precio de venta<input type="number" min="0" step="0.01" value={form.price} onChange={e => setForm({ ...form, price: Number(e.target.value) })} /></label>
-            <label>Cantidad<input type="number" min="0" value={form.quantity} onChange={e => setForm({ ...form, quantity: Number(e.target.value) })} /></label>
-            <label>Stock mínimo<input type="number" min="0" value={form.minimum} onChange={e => setForm({ ...form, minimum: Number(e.target.value) })} /></label>
-            <label className="wide">Notas<textarea rows={3} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>
-            {error && <div className="error-box wide">{error}</div>}
-            <div className="modal-actions wide"><button type="button" className="secondary-button" onClick={() => setOpen(false)}>Cancelar</button><button className="primary-button fit">Guardar</button></div>
-          </form>
-        </Modal>
-      )}
-
-      {movementProduct && (
-        <Modal title={`Movimiento · ${movementProduct.name}`} onClose={() => setMovementProduct(null)}>
-          <form onSubmit={saveMovement} className="form-stack">
-            <label>Tipo<select value={movement.type} onChange={e => setMovement({ ...movement, type: e.target.value })}><option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option><option value="AJUSTE">Ajuste manual</option></select></label>
-            <label>Cantidad<input type="number" value={movement.quantity} onChange={e => setMovement({ ...movement, quantity: Number(e.target.value) })} required /></label>
-            <label>Motivo<textarea rows={3} value={movement.reason} onChange={e => setMovement({ ...movement, reason: e.target.value })} /></label>
-            {error && <div className="error-box">{error}</div>}
-            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setMovementProduct(null)}>Cancelar</button><button className="primary-button fit">Registrar</button></div>
-          </form>
-        </Modal>
-      )}
-    </section>
-  );
+function AppointmentModal({ appointment, clients, employees, services, products, onClose, onSaved }: { appointment: Appointment | null; clients: Client[]; employees: Employee[]; services: Service[]; products: Product[]; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState({ clientId: appointment?.clientId || clients[0]?.id || "", employeeId: appointment?.employeeId || employees[0]?.id || "", startsAt: dateInput(appointment ? new Date(appointment.startsAt) : new Date()), status: appointment?.status || "PENDIENTE", notes: appointment?.notes || "", paid: appointment?.paid || false, serviceIds: appointment?.services.map(s => s.serviceId || "").filter(Boolean) || [] as string[], products: appointment?.products.map(p => ({ productId: p.productId, quantity: Number(p.quantity) })) || [] as { productId: string; quantity: number }[] }); const [error, setError] = useState("");
+  const selectedServices = services.filter(s => form.serviceIds.includes(s.id)); const total = selectedServices.reduce((sum, s) => sum + Number(s.price), 0); const duration = selectedServices.reduce((sum, s) => sum + s.durationMin, 0);
+  async function save(e: FormEvent) { e.preventDefault(); setError(""); try { await api(appointment ? `/appointments/${appointment.id}` : "/appointments", { method: appointment ? "PUT" : "POST", body: JSON.stringify({ ...form, startsAt: new Date(form.startsAt).toISOString(), services: form.serviceIds.map(serviceId => ({ serviceId, discount: 0 })) }) }); onSaved(); } catch (err) { setError(err instanceof Error ? err.message : "No se pudo guardar."); } }
+  async function finish() { if (!appointment) return; try { await api(`/appointments/${appointment.id}/finish`, { method: "POST" }); onSaved(); } catch (err) { setError(err instanceof Error ? err.message : "No se pudo finalizar."); } }
+  return <Modal title={appointment ? "Editar cita" : "Nueva cita"} onClose={onClose}><form onSubmit={save} className="form-grid"><label>Clienta<select value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })}>{clients.map(c => <option value={c.id} key={c.id}>{c.name}</option>)}</select></label><label>Empleada<select value={form.employeeId} onChange={e => setForm({ ...form, employeeId: e.target.value })}>{employees.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></label><label>Fecha y hora<input type="datetime-local" value={form.startsAt} onChange={e => setForm({ ...form, startsAt: e.target.value })} /></label><label>Estado<select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>{["PENDIENTE", "CONFIRMADA", "EN_CURSO", "FINALIZADA", "CANCELADA", "NO_PRESENTADA"].map(x => <option key={x}>{x}</option>)}</select></label><fieldset className="wide"><legend>Servicios</legend><div className="check-grid">{services.map(s => <label className="check-card" key={s.id}><input type="checkbox" checked={form.serviceIds.includes(s.id)} onChange={e => setForm({ ...form, serviceIds: e.target.checked ? [...form.serviceIds, s.id] : form.serviceIds.filter(id => id !== s.id) })} /><span><strong>{s.name}</strong><small>{s.durationMin} min · {euro(s.price)}</small></span></label>)}</div></fieldset><fieldset className="wide"><legend>Productos consumidos</legend>{form.products.map((u, i) => <div className="usage-row" key={i}><select value={u.productId} onChange={e => { const next = [...form.products]; next[i].productId = e.target.value; setForm({ ...form, products: next }); }}>{products.map(p => <option value={p.id} key={p.id}>{p.name} ({unitLabel(p.unit)})</option>)}</select><input type="number" min="0.01" step="0.01" value={u.quantity} onChange={e => { const next = [...form.products]; next[i].quantity = Number(e.target.value); setForm({ ...form, products: next }); }} /><button type="button" className="icon-button danger" onClick={() => setForm({ ...form, products: form.products.filter((_, x) => x !== i) })}><Trash2 /></button></div>)}<button type="button" className="secondary-button fit" onClick={() => products[0] && setForm({ ...form, products: [...form.products, { productId: products[0].id, quantity: 1 }] })}><Plus />Añadir consumo</button></fieldset><label className="wide">Notas<textarea rows={3} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label><div className="appointment-summary wide"><span>Duración: <strong>{duration} min</strong></span><span>Total: <strong>{euro(total)}</strong></span><label className="inline-check"><input type="checkbox" checked={form.paid} onChange={e => setForm({ ...form, paid: e.target.checked })} /> Pagada</label></div>{error && <div className="error-box wide">{error}</div>}<div className="modal-actions wide">{appointment && appointment.status !== "FINALIZADA" && <button type="button" className="success-button" onClick={finish}><CheckCircle2 />Finalizar y descontar stock</button>}<button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button fit">Guardar</button></div></form></Modal>;
 }
 
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="modal-layer">
-      <div className="modal-backdrop" onClick={onClose} />
-      <section className="modal">
-        <header><h3>{title}</h3><button className="icon-button" onClick={onClose}><X size={20} /></button></header>
-        {children}
-      </section>
-    </div>
-  );
-}
+function Clients() { const [items, setItems] = useState<Client[]>([]); const [search, setSearch] = useState(""); const [editing, setEditing] = useState<Client | null>(null); const [detail, setDetail] = useState<Client | null>(null); const [open, setOpen] = useState(false); async function load() { setItems(await api(`/clients?search=${encodeURIComponent(search)}`)); } useEffect(() => { load().catch(console.error); }, [search]); async function remove(id: string) { if (confirm("¿Eliminar esta clienta?")) { await api(`/clients/${id}`, { method: "DELETE" }); load(); } } async function show(id: string) { setDetail(await api(`/clients/${id}`)); }
+  return <section className="page"><PageToolbar search={search} setSearch={setSearch} placeholder="Buscar clienta" button="Nueva clienta" onAdd={() => { setEditing(null); setOpen(true); }} /><div className="content-card table-card"><table><thead><tr><th>Clienta</th><th>Teléfono</th><th>Última fórmula</th><th></th></tr></thead><tbody>{items.map(c => <tr key={c.id}><td><button className="name-link" onClick={() => show(c.id)}>{c.name}</button></td><td>{c.phone || "—"}</td><td>{c.colorFormula || "—"}</td><td className="actions"><button className="icon-button" onClick={() => { setEditing(c); setOpen(true); }}><Pencil /></button><button className="icon-button danger" onClick={() => remove(c.id)}><Trash2 /></button></td></tr>)}</tbody></table></div>{open && <ClientModal client={editing} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); load(); }} />}{detail && <ClientDetail client={detail} onClose={() => setDetail(null)} />}</section>; }
+function ClientModal({ client, onClose, onSaved }: { client: Client | null; onClose: () => void; onSaved: () => void }) { const [form, setForm] = useState(client ? { ...emptyClient, ...client, birthday: client.birthday?.slice(0, 10) || "" } : emptyClient); const [error, setError] = useState(""); async function save(e: FormEvent) { e.preventDefault(); try { await api(client ? `/clients/${client.id}` : "/clients", { method: client ? "PUT" : "POST", body: JSON.stringify(form) }); onSaved(); } catch (err) { setError(err instanceof Error ? err.message : "Error"); } } return <Modal title={client ? "Editar clienta" : "Nueva clienta"} onClose={onClose}><form onSubmit={save} className="form-grid">{Object.entries({ name: "Nombre", phone: "Teléfono", email: "Correo", birthday: "Nacimiento", allergies: "Alergias", colorFormula: "Fórmula / color habitual" }).map(([key, label]) => <label key={key}>{label}<input type={key === "birthday" ? "date" : key === "email" ? "email" : "text"} value={(form as any)[key] || ""} onChange={e => setForm({ ...form, [key]: e.target.value })} /></label>)}<label className="wide">Notas<textarea rows={4} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} /></label>{error && <div className="error-box wide">{error}</div>}<ModalActions onClose={onClose} /></form></Modal>; }
+function ClientDetail({ client, onClose }: { client: Client; onClose: () => void }) { return <Modal title={`Historial · ${client.name}`} onClose={onClose}><div className="client-summary"><div><span>Teléfono</span><strong>{client.phone || "—"}</strong></div><div><span>Alergias</span><strong>{client.allergies || "—"}</strong></div><div><span>Fórmula habitual</span><strong>{client.colorFormula || "—"}</strong></div></div><div className="history-list">{client.appointments?.map(a => <article key={a.id}><time>{new Date(a.startsAt).toLocaleDateString("es-ES")}</time><div><h4>{a.services.map(s => s.serviceName).join(" + ")}</h4><p>{a.employee.name} · {euro(a.total)}</p>{a.products.length > 0 && <small>Productos: {a.products.map(p => `${p.product.name} ${Number(p.quantity)} ${unitLabel(p.product.unit)}`).join(", ")}</small>}<p>{a.notes}</p></div></article>)}{!client.appointments?.length && <div className="empty">Todavía no tiene historial.</div>}</div></Modal>; }
 
-export default App;
+function Services() { const [items, setItems] = useState<Service[]>([]); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<Service | null>(null); async function load() { setItems(await api("/services")); } useEffect(() => { load(); }, []); return <section className="page"><div className="toolbar"><div><p className="muted">Configura el precio y duración de cada tratamiento.</p></div><button className="primary-button fit" onClick={() => { setEditing(null); setOpen(true); }}><Plus />Nuevo servicio</button></div><div className="service-grid">{items.map(s => <article className={`service-card ${!s.active ? "inactive" : ""}`} key={s.id} style={{ borderTopColor: s.color }}><div><span>{s.category || "Sin categoría"}</span><h3>{s.name}</h3><p>{s.description}</p></div><div className="service-price"><strong>{euro(s.price)}</strong><span>{s.durationMin} min</span></div><button className="secondary-button full" onClick={() => { setEditing(s); setOpen(true); }}>Editar</button></article>)}</div>{open && <ServiceModal service={editing} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); load(); }} />}</section>; }
+function ServiceModal({ service, onClose, onSaved }: { service: Service | null; onClose: () => void; onSaved: () => void }) { const [form, setForm] = useState(service ? { ...service, price: Number(service.price) } : emptyService); async function save(e: FormEvent) { e.preventDefault(); await api(service ? `/services/${service.id}` : "/services", { method: service ? "PUT" : "POST", body: JSON.stringify(form) }); onSaved(); } return <Modal title={service ? "Editar servicio" : "Nuevo servicio"} onClose={onClose}><form onSubmit={save} className="form-grid"><label className="wide">Nombre<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label><label>Categoría<input value={form.category || ""} onChange={e => setForm({ ...form, category: e.target.value })} /></label><label>Duración (min)<input type="number" min="5" value={form.durationMin} onChange={e => setForm({ ...form, durationMin: Number(e.target.value) })} /></label><label>Precio (€)<input type="number" min="0" step="0.01" value={form.price} onChange={e => setForm({ ...form, price: Number(e.target.value) })} /></label><label>Color de agenda<input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} /></label><label className="wide">Descripción<textarea rows={3} value={form.description || ""} onChange={e => setForm({ ...form, description: e.target.value })} /></label><ModalActions onClose={onClose} /></form></Modal>; }
+
+function Stock() { const [items, setItems] = useState<Product[]>([]); const [search, setSearch] = useState(""); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<Product | null>(null); const [movement, setMovement] = useState<Product | null>(null); async function load() { setItems(await api(`/products?search=${encodeURIComponent(search)}`)); } useEffect(() => { load(); }, [search]); return <section className="page"><PageToolbar search={search} setSearch={setSearch} placeholder="Buscar producto" button="Nuevo producto" onAdd={() => { setEditing(null); setOpen(true); }} /><div className="product-grid">{items.map(p => { const low = Number(p.quantity) <= Number(p.minimum); return <article className={`product-card ${low ? "low" : ""}`} key={p.id}><div className="product-card-head"><div><span>{p.category || "Sin categoría"}</span><h3>{p.name}</h3><small>{p.brand || ""}</small></div><button className="icon-button" onClick={() => { setEditing(p); setOpen(true); }}><Pencil /></button></div><div className="stock-number"><strong>{Number(p.quantity)}</strong><span>{unitLabel(p.unit)}</span></div><div className="product-meta"><span>Mínimo: {Number(p.minimum)}</span><span>Venta: {euro(p.price)}</span></div>{low && <div className="low-label">Stock bajo</div>}<button className="secondary-button full" onClick={() => setMovement(p)}>Registrar entrada o consumo</button></article>; })}</div>{open && <ProductModal product={editing} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); load(); }} />}{movement && <MovementModal product={movement} onClose={() => setMovement(null)} onSaved={() => { setMovement(null); load(); }} />}</section>; }
+function ProductModal({ product, onClose, onSaved }: { product: Product | null; onClose: () => void; onSaved: () => void }) { const [form, setForm] = useState(product ? { ...emptyProduct, ...product, packageSize: Number(product.packageSize || 0), quantity: Number(product.quantity), minimum: Number(product.minimum), cost: Number(product.cost), price: Number(product.price) } : emptyProduct); async function save(e: FormEvent) { e.preventDefault(); await api(product ? `/products/${product.id}` : "/products", { method: product ? "PUT" : "POST", body: JSON.stringify(form) }); onSaved(); } return <Modal title={product ? "Editar producto" : "Nuevo producto"} onClose={onClose}><form onSubmit={save} className="form-grid">{["name", "brand", "category", "supplier", "sku"].map(k => <label key={k}>{({ name: "Nombre", brand: "Marca", category: "Categoría", supplier: "Proveedor", sku: "SKU" } as any)[k]}<input value={(form as any)[k] || ""} onChange={e => setForm({ ...form, [k]: e.target.value })} /></label>)}<label>Unidad<select value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value as ProductUnit })}>{["UNIDAD", "GRAMO", "MILILITRO", "LITRO", "CAJA"].map(x => <option key={x}>{x}</option>)}</select></label>{[["packageSize", "Tamaño del envase"], ["quantity", "Cantidad disponible"], ["minimum", "Stock mínimo"], ["cost", "Coste"], ["price", "Precio venta"]].map(([k, l]) => <label key={k}>{l}<input type="number" min="0" step="0.01" value={(form as any)[k]} onChange={e => setForm({ ...form, [k]: Number(e.target.value) })} /></label>)}<label className="wide">Notas<textarea rows={3} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} /></label><ModalActions onClose={onClose} /></form></Modal>; }
+function MovementModal({ product, onClose, onSaved }: { product: Product; onClose: () => void; onSaved: () => void }) { const [form, setForm] = useState({ type: "ENTRADA", quantity: 1, reason: "" }); const [error, setError] = useState(""); async function save(e: FormEvent) { e.preventDefault(); try { await api(`/products/${product.id}/movements`, { method: "POST", body: JSON.stringify(form) }); onSaved(); } catch (err) { setError(err instanceof Error ? err.message : "Error"); } } return <Modal title={`Movimiento · ${product.name}`} onClose={onClose}><form onSubmit={save} className="form-stack"><div className="notice">Disponible: {Number(product.quantity)} {unitLabel(product.unit)}</div><label>Tipo<select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}><option value="ENTRADA">Entrada</option><option value="SALIDA">Salida manual</option><option value="MERMA">Merma / desperdicio</option><option value="VENTA">Venta de producto</option><option value="AJUSTE">Ajuste</option></select></label><label>Cantidad ({unitLabel(product.unit)})<input type="number" step="0.01" value={form.quantity} onChange={e => setForm({ ...form, quantity: Number(e.target.value) })} /></label><label>Motivo<textarea rows={3} value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} /></label>{error && <div className="error-box">{error}</div>}<ModalActions onClose={onClose} /></form></Modal>; }
+
+function Employees() { const [items, setItems] = useState<Employee[]>([]); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<Employee | null>(null); async function load() { setItems(await api("/employees")); } useEffect(() => { load(); }, []); return <section className="page"><div className="toolbar"><p className="muted">Equipo que aparece en la agenda.</p><button className="primary-button fit" onClick={() => { setEditing(null); setOpen(true); }}><Plus />Nueva empleada</button></div><div className="employee-grid">{items.map(e => <article className={`employee-card ${!e.active ? "inactive" : ""}`} key={e.id}><div className="avatar" style={{ background: e.color }}>{e.name.slice(0, 1)}</div><h3>{e.name}</h3><p>{e.specialty || "Sin especialidad"}</p><button className="secondary-button full" onClick={() => { setEditing(e); setOpen(true); }}>Editar</button></article>)}</div>{open && <EmployeeModal employee={editing} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); load(); }} />}</section>; }
+function EmployeeModal({ employee, onClose, onSaved }: { employee: Employee | null; onClose: () => void; onSaved: () => void }) { const [form, setForm] = useState(employee ? { ...employee } : emptyEmployee); async function save(e: FormEvent) { e.preventDefault(); await api(employee ? `/employees/${employee.id}` : "/employees", { method: employee ? "PUT" : "POST", body: JSON.stringify(form) }); onSaved(); } return <Modal title={employee ? "Editar empleada" : "Nueva empleada"} onClose={onClose}><form onSubmit={save} className="form-grid">{["name", "specialty", "phone", "email"].map(k => <label key={k}>{({ name: "Nombre", specialty: "Especialidad", phone: "Teléfono", email: "Correo" } as any)[k]}<input value={(form as any)[k] || ""} onChange={e => setForm({ ...form, [k]: e.target.value })} /></label>)}<label>Color de agenda<input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} /></label><label className="inline-check"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Activa</label><ModalActions onClose={onClose} /></form></Modal>; }
+
+function PageToolbar({ search, setSearch, placeholder, button, onAdd }: any) { return <div className="toolbar"><div className="search-box"><Search /><input placeholder={placeholder} value={search} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} /></div><button className="primary-button fit" onClick={onAdd}><Plus />{button}</button></div>; }
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) { return <div className="modal-layer"><div className="modal-backdrop" onClick={onClose} /><section className="modal"><header><h3>{title}</h3><button className="icon-button" onClick={onClose}><X /></button></header>{children}</section></div>; }
+function ModalActions({ onClose }: { onClose: () => void }) { return <div className="modal-actions wide"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button fit">Guardar</button></div>; }
+function unitLabel(unit: ProductUnit) { return ({ UNIDAD: "uds.", GRAMO: "g", MILILITRO: "ml", LITRO: "l", CAJA: "cajas" } as Record<ProductUnit, string>)[unit]; }
+function sameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+function startOfWeek(d: Date) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+function calendarRange(cursor: Date, view: CalendarView) { if (view === "day") { const from = new Date(cursor); from.setHours(0, 0, 0, 0); const to = new Date(from); to.setDate(to.getDate() + 1); return { from, to }; } if (view === "week") { const from = startOfWeek(cursor); const to = new Date(from); to.setDate(to.getDate() + 7); return { from, to }; } const from = new Date(cursor.getFullYear(), cursor.getMonth(), 1); const to = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1); return { from, to }; }

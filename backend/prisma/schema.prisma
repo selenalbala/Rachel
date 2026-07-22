@@ -11,6 +11,26 @@ enum StockMovementType {
   ENTRADA
   SALIDA
   AJUSTE
+  CONSUMO_CITA
+  VENTA
+  MERMA
+}
+
+enum AppointmentStatus {
+  PENDIENTE
+  CONFIRMADA
+  EN_CURSO
+  FINALIZADA
+  CANCELADA
+  NO_PRESENTADA
+}
+
+enum ProductUnit {
+  UNIDAD
+  GRAMO
+  MILILITRO
+  LITRO
+  CAJA
 }
 
 model User {
@@ -23,49 +43,124 @@ model User {
 }
 
 model Client {
-  id          String   @id @default(cuid())
-  name        String
-  phone       String?
-  email       String?
-  birthday    DateTime?
-  allergies   String?
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String        @id @default(cuid())
+  name         String
+  phone        String?
+  email        String?
+  birthday     DateTime?
+  allergies    String?
+  notes        String?
+  colorFormula String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  appointments Appointment[]
+}
 
-  @@index([name])
-  @@index([phone])
+model Employee {
+  id           String        @id @default(cuid())
+  name         String
+  specialty    String?
+  phone        String?
+  email        String?
+  color        String        @default("#EC4899")
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  appointments Appointment[]
+}
+
+model Service {
+  id           String               @id @default(cuid())
+  name         String
+  category     String?
+  description  String?
+  durationMin  Int
+  price        Decimal              @db.Decimal(10, 2)
+  color        String               @default("#F9A8D4")
+  active       Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  appointments AppointmentService[]
 }
 
 model Product {
-  id          String          @id @default(cuid())
-  name        String
-  brand       String?
-  category    String?
-  supplier    String?
-  sku         String?         @unique
-  cost        Decimal         @default(0) @db.Decimal(10, 2)
-  price       Decimal         @default(0) @db.Decimal(10, 2)
-  quantity    Int             @default(0)
-  minimum     Int             @default(0)
-  notes       String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  movements   StockMovement[]
+  id           String               @id @default(cuid())
+  name         String
+  brand        String?
+  category     String?
+  supplier     String?
+  sku          String?              @unique
+  unit         ProductUnit          @default(UNIDAD)
+  packageSize  Decimal?             @db.Decimal(12, 2)
+  quantity     Decimal              @default(0) @db.Decimal(12, 2)
+  minimum      Decimal              @default(0) @db.Decimal(12, 2)
+  cost         Decimal              @default(0) @db.Decimal(10, 2)
+  price        Decimal              @default(0) @db.Decimal(10, 2)
+  notes        String?
+  active       Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  movements    StockMovement[]
+  usages       AppointmentProduct[]
+}
 
-  @@index([name])
-  @@index([category])
+model Appointment {
+  id           String               @id @default(cuid())
+  clientId     String
+  employeeId   String
+  startsAt     DateTime
+  endsAt       DateTime
+  status       AppointmentStatus    @default(PENDIENTE)
+  notes        String?
+  total        Decimal              @default(0) @db.Decimal(10, 2)
+  paid         Boolean              @default(false)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  client       Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  employee     Employee             @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  services     AppointmentService[]
+  products     AppointmentProduct[]
+  movements    StockMovement[]
+
+  @@index([startsAt])
+  @@index([clientId])
+  @@index([employeeId])
+}
+
+model AppointmentService {
+  id             String      @id @default(cuid())
+  appointmentId  String
+  serviceId      String?
+  serviceName    String
+  durationMin    Int
+  unitPrice      Decimal     @db.Decimal(10, 2)
+  discount       Decimal     @default(0) @db.Decimal(10, 2)
+  finalPrice     Decimal     @db.Decimal(10, 2)
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  service        Service?    @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+}
+
+model AppointmentProduct {
+  id             String      @id @default(cuid())
+  appointmentId  String
+  productId      String
+  quantity       Decimal     @db.Decimal(12, 2)
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  product        Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
 }
 
 model StockMovement {
-  id        String            @id @default(cuid())
-  productId String
-  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
-  type      StockMovementType
-  quantity  Int
-  reason    String?
-  createdAt DateTime          @default(now())
+  id             String            @id @default(cuid())
+  productId      String
+  appointmentId  String?
+  type           StockMovementType
+  quantity       Decimal           @db.Decimal(12, 2)
+  previousStock  Decimal           @db.Decimal(12, 2)
+  resultingStock Decimal           @db.Decimal(12, 2)
+  reason         String?
+  createdAt      DateTime          @default(now())
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  appointment    Appointment?      @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
 
-  @@index([productId])
-  @@index([createdAt])
+  @@index([productId, createdAt])
 }
