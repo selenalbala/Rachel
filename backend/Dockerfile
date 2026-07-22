@@ -29,4 +29,4 @@ COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "npx prisma db push --schema=./prisma/schema.prisma && node dist/src/server.js"]
+CMD ["sh", "-c", "npx prisma db push --schema=./prisma/schema.prisma && node dist/server.js"]
