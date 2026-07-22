@@ -26,6 +26,16 @@ app.use(morgan("combined"));
 type AuthPayload = { userId: string; email: string };
 type AuthRequest = Request & { auth?: AuthPayload };
 
+function getParam(req: Request, name: string): string {
+  const value = req.params[name];
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Parámetro inválido: ${name}`);
+  }
+
+  return value;
+}
+
 function asyncRoute(
   handler: (req: AuthRequest, res: Response, next: NextFunction) => Promise<void>
 ) {
@@ -183,7 +193,7 @@ app.post("/clients", auth, asyncRoute(async (req, res) => {
 app.put("/clients/:id", auth, asyncRoute(async (req, res) => {
   const data = clientSchema.parse(req.body);
   const client = await prisma.client.update({
-    where: { id: req.params.id },
+    where: { id: getParam(req, "id") },
     data: {
       ...data,
       email: data.email || null,
@@ -194,7 +204,7 @@ app.put("/clients/:id", auth, asyncRoute(async (req, res) => {
 }));
 
 app.delete("/clients/:id", auth, asyncRoute(async (req, res) => {
-  await prisma.client.delete({ where: { id: req.params.id } });
+  await prisma.client.delete({ where: { id: getParam(req, "id") } });
   res.status(204).end();
 }));
 
@@ -242,12 +252,12 @@ app.post("/products", auth, asyncRoute(async (req, res) => {
 
 app.put("/products/:id", auth, asyncRoute(async (req, res) => {
   const data = productSchema.parse(req.body);
-  const current = await prisma.product.findUniqueOrThrow({ where: { id: req.params.id } });
+  const current = await prisma.product.findUniqueOrThrow({ where: { id: getParam(req, "id") } });
   const difference = data.quantity - current.quantity;
 
   const product = await prisma.$transaction(async tx => {
     const updated = await tx.product.update({
-      where: { id: req.params.id },
+      where: { id: getParam(req, "id") },
       data: {
         ...data,
         sku: data.sku?.trim() || null,
@@ -283,7 +293,7 @@ app.post("/products/:id/movements", auth, asyncRoute(async (req, res) => {
         : data.quantity;
 
   const result = await prisma.$transaction(async tx => {
-    const product = await tx.product.findUniqueOrThrow({ where: { id: req.params.id } });
+    const product = await tx.product.findUniqueOrThrow({ where: { id: getParam(req, "id") } });
     const nextQuantity = product.quantity + signedQuantity;
 
     if (nextQuantity < 0) {
@@ -311,7 +321,7 @@ app.post("/products/:id/movements", auth, asyncRoute(async (req, res) => {
 }));
 
 app.delete("/products/:id", auth, asyncRoute(async (req, res) => {
-  await prisma.product.delete({ where: { id: req.params.id } });
+  await prisma.product.delete({ where: { id: getParam(req, "id") } });
   res.status(204).end();
 }));
 
