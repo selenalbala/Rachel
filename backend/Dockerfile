@@ -9,8 +9,9 @@ COPY prisma ./prisma
 COPY tsconfig.json ./
 COPY src ./src
 
+RUN rm -rf dist
 RUN npx prisma generate --schema=./prisma/schema.prisma
-RUN npm run build
+RUN npx tsc
 
 FROM node:22-alpine
 
@@ -28,4 +29,4 @@ COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "npx prisma db push --schema=./prisma/schema.prisma --accept-data-loss && node dist/src/server.js"]
+CMD ["sh", "-c", "npx prisma db push --schema=./prisma/schema.prisma && node dist/src/server.js"]
