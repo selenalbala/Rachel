@@ -183,12 +183,18 @@ app.put("/api/clients/:id", auth, asyncRoute(async (req, res) => {
 }));
 app.delete("/api/clients/:id", auth, asyncRoute(async (req, res) => { await prisma.client.delete({ where: { id: param(req, "id") } }); res.status(204).end(); }));
 
-app.get("/api/employees", auth, asyncRoute(async (_req, res) => res.json(await prisma.employee.findMany({ orderBy: { name: "asc" } }))));
+app.get("/api/employees", auth, asyncRoute(async (_req, res) => {
+  const employees = await prisma.employee.findMany({ orderBy: { name: "asc" } });
+  res.json(employees);
+}));
 app.post("/api/employees", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.status(201).json(await prisma.employee.create({ data: { ...data, email: data.email || null } })); }));
 app.put("/api/employees/:id", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.json(await prisma.employee.update({ where: { id: param(req, "id") }, data: { ...data, email: data.email || null } })); }));
 app.delete("/api/employees/:id", auth, asyncRoute(async (req, res) => { await prisma.employee.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
 
-app.get("/api/services", auth, asyncRoute(async (_req, res) => res.json(await prisma.service.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }] }))));
+app.get("/api/services", auth, asyncRoute(async (_req, res) => {
+  const services = await prisma.service.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }] });
+  res.json(services);
+}));
 app.post("/api/services", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.status(201).json(await prisma.service.create({ data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
 app.put("/api/services/:id", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.json(await prisma.service.update({ where: { id: param(req, "id") }, data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
 app.delete("/api/services/:id", auth, asyncRoute(async (req, res) => { await prisma.service.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
@@ -217,7 +223,17 @@ app.post("/api/products/:id/movements", auth, asyncRoute(async (req, res) => {
   const result = await prisma.$transaction(async tx => {
     const product = await tx.product.findUniqueOrThrow({ where: { id } });
     const raw = new Prisma.Decimal(data.quantity);
-    const signed = [StockMovementType.SALIDA, StockMovementType.CONSUMO_CITA, StockMovementType.VENTA, StockMovementType.MERMA].includes(data.type) ? raw.abs().negated() : data.type === StockMovementType.ENTRADA ? raw.abs() : raw;
+    const isOutgoing =
+      data.type === StockMovementType.SALIDA ||
+      data.type === StockMovementType.CONSUMO_CITA ||
+      data.type === StockMovementType.VENTA ||
+      data.type === StockMovementType.MERMA;
+
+    const signed = isOutgoing
+      ? raw.abs().negated()
+      : data.type === StockMovementType.ENTRADA
+        ? raw.abs()
+        : raw;
     const next = product.quantity.plus(signed); if (next.lessThan(0)) throw new Error("No hay suficiente stock.");
     const updated = await tx.product.update({ where: { id }, data: { quantity: next } });
     const movement = await tx.stockMovement.create({ data: { productId: id, appointmentId: data.appointmentId || null, type: data.type, quantity: signed, previousStock: product.quantity, resultingStock: next, reason: data.reason || null } });
