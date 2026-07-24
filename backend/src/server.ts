@@ -1,676 +1,286 @@
-import 'dotenv/config';
-import express, {
-  type NextFunction,
-  type Request,
-  type RequestHandler,
-  type Response
-} from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import morgan from 'morgan';
+import "dotenv/config";
+import express, { NextFunction, Request, Response } from "express";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import {
   AppointmentStatus,
+  Prisma,
   PrismaClient,
-  RequestStatus,
+  ProductUnit,
   StockMovementType
-} from '@prisma/client';
-import { z } from 'zod';
+} from "@prisma/client";
+import { z } from "zod";
 
 const prisma = new PrismaClient();
 const app = express();
-const port = Number(process.env.PORT || 3001);
-
-const origins = (
-  process.env.CORS_ORIGIN ||
-  'http://localhost:5173'
-)
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
+const port = Number(process.env.PORT || 8080);
+const jwtSecret = process.env.JWT_SECRET || "cambia-esta-clave";
+const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || "*";
 
 app.use(helmet());
+app.use(cors({
+  origin: frontendUrl === "*" ? true : frontendUrl.split(",").map(value => value.trim()),
+  credentials: true
+}));
+app.use(express.json({ limit: "5mb" }));
+app.use(morgan("combined"));
 
-app.use(
-  cors({
-    origin: origins.includes('*') ? true : origins
-  })
-);
+type AuthPayload = { userId: string; email: string };
+type AuthRequest = Request & { auth?: AuthPayload };
 
-app.use(express.json({ limit: '2mb' }));
-app.use(morgan('tiny'));
-
-type AsyncRouteHandler = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => Promise<unknown>;
-
-const wrap = (
-  handler: AsyncRouteHandler
-): RequestHandler => {
-  return (req, res, next) => {
-    void Promise
-      .resolve(handler(req, res, next))
-      .catch(next);
+function asyncRoute(handler: (req: AuthRequest, res: Response, next: NextFunction) => Promise<void>) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    handler(req, res, next).catch(next);
   };
-};
+}
 
-const obtenerParametro = (
-  value: string | string[] | undefined
-): string => {
-  if (Array.isArray(value)) {
-    if (!value[0]) {
-      throw new Error(
-        'Falta un parámetro obligatorio en la ruta.'
-      );
-    }
-
-    return value[0];
-  }
-
-  if (!value) {
-    throw new Error(
-      'Falta un parámetro obligatorio en la ruta.'
-    );
-  }
-
+function param(req: Request, name: string): string {
+  const value = req.params[name];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Parámetro inválido: ${name}`);
   return value;
-};
+}
 
-app.get(
-  '/health',
-  (_req: Request, res: Response) => {
-    res.json({ ok: true });
+function auth(req: AuthRequest, res: Response, next: NextFunction): void {
+  const value = req.headers.authorization;
+  if (!value?.startsWith("Bearer ")) {
+    res.status(401).json({ message: "Debes iniciar sesión." });
+    return;
   }
-);
-
-app.get(
-  '/api/dashboard',
-  wrap(async (_req, res) => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const [
-      appointments,
-      requests,
-      products,
-      employees
-    ] = await Promise.all([
-      prisma.appointment.findMany({
-        where: {
-          startsAt: {
-            gte: start,
-            lt: end
-          }
-        },
-        include: {
-          client: true,
-          employee: true,
-          services: {
-            include: {
-              service: true
-            }
-          }
-        },
-        orderBy: {
-          startsAt: 'asc'
-        }
-      }),
-
-      prisma.clientRequest.findMany({
-        include: {
-          client: true
-        },
-        orderBy: {
-          createdAt: 'desc'
-        },
-        take: 5
-      }),
-
-      prisma.product.findMany({
-        orderBy: {
-          stock: 'asc'
-        }
-      }),
-
-      prisma.employee.findMany({
-        where: {
-          active: true
-        },
-        orderBy: {
-          name: 'asc'
-        }
-      })
-    ]);
-
-    const lowStock = products.filter(
-      product =>
-        product.stock <= product.minStock
-    );
-
-    const pendingRequests = requests.filter(
-      request =>
-        request.status === RequestStatus.NEW ||
-        request.status === RequestStatus.REVIEWING
-    ).length;
-
-    const revenueTodayCents = appointments
-      .filter(
-        appointment =>
-          appointment.status ===
-          AppointmentStatus.COMPLETED
-      )
-      .flatMap(
-        appointment => appointment.services
-      )
-      .reduce(
-        (total, service) =>
-          total + service.priceCents,
-        0
-      );
-
-    res.json({
-      appointments,
-      requests,
-      lowStock,
-      employees,
-      stats: {
-        appointmentsToday: appointments.length,
-        pendingRequests,
-        lowStock: lowStock.length,
-        revenueTodayCents
-      }
-    });
-  })
-);
-
-app.get(
-  '/api/clients',
-  wrap(async (_req, res) => {
-    const clients =
-      await prisma.client.findMany({
-        orderBy: {
-          name: 'asc'
-        }
-      });
-
-    res.json(clients);
-  })
-);
-
-app.post(
-  '/api/clients',
-  wrap(async (req, res) => {
-    const data = z
-      .object({
-        name: z.string().min(2),
-        phone: z.string().optional(),
-        email: z
-          .string()
-          .email()
-          .optional()
-          .or(z.literal('')),
-        notes: z.string().optional()
-      })
-      .parse(req.body);
-
-    const client =
-      await prisma.client.create({
-        data: {
-          name: data.name,
-          phone: data.phone || null,
-          email: data.email || null,
-          notes: data.notes || null
-        }
-      });
-
-    res.status(201).json(client);
-  })
-);
-
-app.get(
-  '/api/services',
-  wrap(async (_req, res) => {
-    const services =
-      await prisma.service.findMany({
-        where: {
-          active: true
-        },
-        orderBy: [
-          {
-            category: 'asc'
-          },
-          {
-            name: 'asc'
-          }
-        ]
-      });
-
-    res.json(services);
-  })
-);
-
-app.get(
-  '/api/employees',
-  wrap(async (_req, res) => {
-    const employees =
-      await prisma.employee.findMany({
-        where: {
-          active: true
-        },
-        orderBy: {
-          name: 'asc'
-        }
-      });
-
-    res.json(employees);
-  })
-);
-
-app.get(
-  '/api/products',
-  wrap(async (_req, res) => {
-    const products =
-      await prisma.product.findMany({
-        orderBy: {
-          name: 'asc'
-        }
-      });
-
-    res.json(products);
-  })
-);
-
-app.get(
-  '/api/requests',
-  wrap(async (_req, res) => {
-    const requests =
-      await prisma.clientRequest.findMany({
-        include: {
-          client: true
-        },
-        orderBy: {
-          createdAt: 'desc'
-        }
-      });
-
-    res.json(requests);
-  })
-);
-
-app.post(
-  '/api/appointments',
-  wrap(async (req, res) => {
-    const data = z
-      .object({
-        clientId: z.string().min(1),
-        employeeId: z.string().min(1),
-        serviceIds: z
-          .array(z.string())
-          .min(1),
-        startsAt: z.string().datetime(),
-        notes: z.string().optional()
-      })
-      .parse(req.body);
-
-    const services =
-      await prisma.service.findMany({
-        where: {
-          id: {
-            in: data.serviceIds
-          },
-          active: true
-        }
-      });
-
-    if (
-      services.length !==
-      data.serviceIds.length
-    ) {
-      res.status(400).json({
-        message:
-          'Uno o varios servicios no existen.'
-      });
-
-      return;
-    }
-
-    const totalMinutes = services.reduce(
-      (total, service) =>
-        total + service.durationMinutes,
-      0
-    );
-
-    const start = new Date(data.startsAt);
-
-    const end = new Date(
-      start.getTime() +
-      totalMinutes * 60_000
-    );
-
-    const conflict =
-      await prisma.appointment.findFirst({
-        where: {
-          employeeId: data.employeeId,
-          status: {
-            notIn: [
-              AppointmentStatus.CANCELLED,
-              AppointmentStatus.NO_SHOW
-            ]
-          },
-          startsAt: {
-            lt: end
-          },
-          endsAt: {
-            gt: start
-          }
-        }
-      });
-
-    if (conflict) {
-      res.status(409).json({
-        message:
-          'Ese empleado ya tiene una cita en ese horario.'
-      });
-
-      return;
-    }
-
-    const appointment =
-      await prisma.appointment.create({
-        data: {
-          clientId: data.clientId,
-          employeeId: data.employeeId,
-          startsAt: start,
-          endsAt: end,
-          notes: data.notes || null,
-          services: {
-            create: services.map(
-              service => ({
-                serviceId: service.id,
-                priceCents:
-                  service.priceCents
-              })
-            )
-          }
-        },
-        include: {
-          client: true,
-          employee: true,
-          services: {
-            include: {
-              service: true
-            }
-          }
-        }
-      });
-
-    res.status(201).json(appointment);
-  })
-);
-
-app.patch(
-  '/api/appointments/:id/status',
-  wrap(async (req, res) => {
-    const status = z
-      .nativeEnum(AppointmentStatus)
-      .parse(req.body.status);
-
-    const id = obtenerParametro(
-      req.params.id
-    );
-
-    if (
-      status ===
-      AppointmentStatus.COMPLETED
-    ) {
-      const appointmentServices =
-        await prisma.appointmentService.findMany({
-          where: {
-            appointmentId: id
-          },
-          include: {
-            service: {
-              include: {
-                serviceProducts: true
-              }
-            }
-          }
-        });
-
-      await prisma.$transaction(
-        async transaction => {
-          for (
-            const appointmentService of
-            appointmentServices
-          ) {
-            for (
-              const usage of
-              appointmentService.service
-                .serviceProducts
-            ) {
-              await transaction.product.update({
-                where: {
-                  id: usage.productId
-                },
-                data: {
-                  stock: {
-                    decrement:
-                      usage.quantity
-                  }
-                }
-              });
-
-              await transaction
-                .stockMovement.create({
-                  data: {
-                    productId:
-                      usage.productId,
-                    type:
-                      StockMovementType.SERVICE,
-                    quantity:
-                      -usage.quantity,
-                    note:
-                      `Consumo cita ${id}`
-                  }
-                });
-            }
-          }
-
-          await transaction
-            .appointment.update({
-              where: {
-                id
-              },
-              data: {
-                status
-              }
-            });
-        }
-      );
-    } else {
-      await prisma.appointment.update({
-        where: {
-          id
-        },
-        data: {
-          status
-        }
-      });
-    }
-
-    res.json({
-      ok: true
-    });
-  })
-);
-
-app.post(
-  '/api/requests',
-  wrap(async (req, res) => {
-    const data = z
-      .object({
-        clientId: z.string().min(1),
-        title: z.string().min(2),
-        description: z
-          .string()
-          .optional(),
-        preferredDate: z
-          .string()
-          .datetime()
-          .optional()
-      })
-      .parse(req.body);
-
-    const request =
-      await prisma.clientRequest.create({
-        data: {
-          clientId: data.clientId,
-          title: data.title,
-          description:
-            data.description || null,
-          preferredDate:
-            data.preferredDate
-              ? new Date(data.preferredDate)
-              : null
-        },
-        include: {
-          client: true
-        }
-      });
-
-    res.status(201).json(request);
-  })
-);
-
-app.patch(
-  '/api/requests/:id/status',
-  wrap(async (req, res) => {
-    const status = z
-      .nativeEnum(RequestStatus)
-      .parse(req.body.status);
-
-    const id = obtenerParametro(
-      req.params.id
-    );
-
-    const request =
-      await prisma.clientRequest.update({
-        where: {
-          id
-        },
-        data: {
-          status
-        },
-        include: {
-          client: true
-        }
-      });
-
-    res.json(request);
-  })
-);
-
-app.post(
-  '/api/products/:id/movements',
-  wrap(async (req, res) => {
-    const data = z
-      .object({
-        quantity: z
-          .number()
-          .refine(
-            quantity => quantity !== 0,
-            {
-              message:
-                'La cantidad no puede ser cero.'
-            }
-          ),
-        type: z.nativeEnum(
-          StockMovementType
-        ),
-        note: z.string().optional()
-      })
-      .parse(req.body);
-
-    const productId = obtenerParametro(
-      req.params.id
-    );
-
-    const result =
-      await prisma.$transaction(
-        async transaction => {
-          const product =
-            await transaction.product.update({
-              where: {
-                id: productId
-              },
-              data: {
-                stock: {
-                  increment: data.quantity
-                }
-              }
-            });
-
-          await transaction
-            .stockMovement.create({
-              data: {
-                productId: product.id,
-                quantity: data.quantity,
-                type: data.type,
-                note: data.note || null
-              }
-            });
-
-          return product;
-        }
-      );
-
-    res.json(result);
-  })
-);
-
-app.use(
-  (
-    error: unknown,
-    _req: Request,
-    res: Response,
-    _next: NextFunction
-  ) => {
-    console.error(error);
-
-    if (error instanceof z.ZodError) {
-      res.status(400).json({
-        message: 'Datos no válidos',
-        issues: error.issues
-      });
-
-      return;
-    }
-
-    res.status(500).json({
-      message:
-        'Error interno del servidor'
-    });
+  try {
+    req.auth = jwt.verify(value.slice(7), jwtSecret) as AuthPayload;
+    next();
+  } catch {
+    res.status(401).json({ message: "La sesión ha caducado." });
   }
-);
+}
 
-app.listen(
-  port,
-  '0.0.0.0',
-  () => {
-    console.log(
-      `Bella API en puerto ${port}`
-    );
+async function ensureAdmin(): Promise<void> {
+  const email = (process.env.ADMIN_EMAIL || "admin@rachelstudio.es").trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || "Rachel1234";
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (!existing) {
+    await prisma.user.create({ data: { name: "Rachel Studio", email, passwordHash: await bcrypt.hash(password, 12) } });
+    console.log(`Usuario administrador creado: ${email}`);
   }
-);
+}
 
-process.on(
-  'SIGTERM',
-  async () => {
-    await prisma.$disconnect();
-    process.exit(0);
+const loginSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
+const clientSchema = z.object({
+  name: z.string().trim().min(2),
+  phone: z.string().optional().nullable(),
+  email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
+  birthday: z.union([z.string(), z.null()]).optional(),
+  allergies: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  colorFormula: z.string().optional().nullable()
+});
+const employeeSchema = z.object({
+  name: z.string().trim().min(2),
+  specialty: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
+  color: z.string().default("#B8A48A"),
+  active: z.boolean().default(true)
+});
+const serviceSchema = z.object({
+  name: z.string().trim().min(2),
+  category: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
+  durationMin: z.coerce.number().int().min(5),
+  price: z.coerce.number().min(0),
+  color: z.string().default("#E3D6C6"),
+  active: z.boolean().default(true)
+});
+const productSchema = z.object({
+  name: z.string().trim().min(2),
+  brand: z.string().optional().nullable(),
+  category: z.string().optional().nullable(),
+  supplier: z.string().optional().nullable(),
+  sku: z.string().optional().nullable(),
+  unit: z.nativeEnum(ProductUnit),
+  packageSize: z.coerce.number().min(0).optional().nullable(),
+  quantity: z.coerce.number().min(0),
+  minimum: z.coerce.number().min(0),
+  cost: z.coerce.number().min(0),
+  price: z.coerce.number().min(0),
+  notes: z.string().optional().nullable(),
+  active: z.boolean().default(true)
+});
+const movementSchema = z.object({
+  type: z.nativeEnum(StockMovementType),
+  quantity: z.coerce.number().refine(value => value !== 0, "La cantidad no puede ser cero."),
+  reason: z.string().optional().nullable(),
+  appointmentId: z.string().optional().nullable()
+});
+const appointmentSchema = z.object({
+  clientId: z.string().min(1),
+  employeeId: z.string().min(1),
+  startsAt: z.string().datetime(),
+  status: z.nativeEnum(AppointmentStatus).default(AppointmentStatus.PENDIENTE),
+  notes: z.string().optional().nullable(),
+  paid: z.boolean().default(false),
+  services: z.array(z.object({ serviceId: z.string().min(1), discount: z.coerce.number().min(0).max(100).default(0) })).min(1),
+  products: z.array(z.object({ productId: z.string().min(1), quantity: z.coerce.number().positive() })).default([])
+});
+
+app.get("/", (_req, res) => res.json({ name: "Rachel Studio API", status: "ok" }));
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
+app.post("/auth/login", asyncRoute(async (req, res) => {
+  const data = loginSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { email: data.email.trim().toLowerCase() } });
+  if (!user || !(await bcrypt.compare(data.password, user.passwordHash))) {
+    res.status(401).json({ message: "Correo o contraseña incorrectos." });
+    return;
   }
-);
+  const token = jwt.sign({ userId: user.id, email: user.email } satisfies AuthPayload, jwtSecret, { expiresIn: "7d" });
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
+}));
+
+app.get("/auth/me", auth, asyncRoute(async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { id: true, name: true, email: true } });
+  if (!user) { res.status(401).json({ message: "Usuario no encontrado." }); return; }
+  res.json(user);
+}));
+
+app.get("/api/dashboard", auth, asyncRoute(async (_req, res) => {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const end = new Date(start); end.setDate(end.getDate() + 1);
+  const monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
+  const [clients, allProducts, todayAppointments, monthAppointments, nextAppointment] = await Promise.all([
+    prisma.client.count(),
+    prisma.product.findMany({ where: { active: true } }),
+    prisma.appointment.findMany({ where: { startsAt: { gte: start, lt: end }, status: { not: AppointmentStatus.CANCELADA } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } }),
+    prisma.appointment.findMany({ where: { startsAt: { gte: monthStart }, status: AppointmentStatus.FINALIZADA }, select: { total: true } }),
+    prisma.appointment.findFirst({ where: { startsAt: { gte: new Date() }, status: { in: [AppointmentStatus.PENDIENTE, AppointmentStatus.CONFIRMADA] } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } })
+  ]);
+  const lowProducts = allProducts.filter(product => Number(product.quantity) <= Number(product.minimum));
+  const todayRevenue = todayAppointments.filter(appointment => appointment.status === AppointmentStatus.FINALIZADA).reduce((sum, appointment) => sum + Number(appointment.total), 0);
+  const monthRevenue = monthAppointments.reduce((sum, appointment) => sum + Number(appointment.total), 0);
+  res.json({ clients, products: allProducts.length, lowStock: lowProducts.length, lowProducts: lowProducts.slice(0, 5), todayAppointments, todayRevenue, monthRevenue, nextAppointment });
+}));
+
+app.get("/api/clients", auth, asyncRoute(async (req, res) => {
+  const search = String(req.query.search || "").trim();
+  res.json(await prisma.client.findMany({
+    where: search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { phone: { contains: search, mode: "insensitive" } }, { email: { contains: search, mode: "insensitive" } }] } : undefined,
+    orderBy: { name: "asc" }
+  }));
+}));
+app.get("/api/clients/:id", auth, asyncRoute(async (req, res) => {
+  res.json(await prisma.client.findUniqueOrThrow({ where: { id: param(req, "id") }, include: { appointments: { include: { employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "desc" } } } }));
+}));
+app.post("/api/clients", auth, asyncRoute(async (req, res) => {
+  const data = clientSchema.parse(req.body);
+  res.status(201).json(await prisma.client.create({ data: { ...data, email: data.email || null, birthday: data.birthday ? new Date(data.birthday) : null } }));
+}));
+app.put("/api/clients/:id", auth, asyncRoute(async (req, res) => {
+  const data = clientSchema.parse(req.body);
+  res.json(await prisma.client.update({ where: { id: param(req, "id") }, data: { ...data, email: data.email || null, birthday: data.birthday ? new Date(data.birthday) : null } }));
+}));
+app.delete("/api/clients/:id", auth, asyncRoute(async (req, res) => { await prisma.client.delete({ where: { id: param(req, "id") } }); res.status(204).end(); }));
+
+app.get("/api/employees", auth, asyncRoute(async (_req, res) => res.json(await prisma.employee.findMany({ orderBy: { name: "asc" } }))));
+app.post("/api/employees", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.status(201).json(await prisma.employee.create({ data: { ...data, email: data.email || null } })); }));
+app.put("/api/employees/:id", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.json(await prisma.employee.update({ where: { id: param(req, "id") }, data: { ...data, email: data.email || null } })); }));
+app.delete("/api/employees/:id", auth, asyncRoute(async (req, res) => { await prisma.employee.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
+
+app.get("/api/services", auth, asyncRoute(async (_req, res) => res.json(await prisma.service.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }] }))));
+app.post("/api/services", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.status(201).json(await prisma.service.create({ data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
+app.put("/api/services/:id", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.json(await prisma.service.update({ where: { id: param(req, "id") }, data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
+app.delete("/api/services/:id", auth, asyncRoute(async (req, res) => { await prisma.service.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
+
+app.get("/api/products", auth, asyncRoute(async (req, res) => {
+  const search = String(req.query.search || "").trim();
+  res.json(await prisma.product.findMany({ where: search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { brand: { contains: search, mode: "insensitive" } }, { sku: { contains: search, mode: "insensitive" } }] } : undefined, orderBy: { name: "asc" }, include: { movements: { take: 15, orderBy: { createdAt: "desc" } } } }));
+}));
+app.post("/api/products", auth, asyncRoute(async (req, res) => {
+  const data = productSchema.parse(req.body);
+  const product = await prisma.product.create({ data: { ...data, sku: data.sku?.trim() || null, packageSize: data.packageSize == null ? null : new Prisma.Decimal(data.packageSize), quantity: new Prisma.Decimal(data.quantity), minimum: new Prisma.Decimal(data.minimum), cost: new Prisma.Decimal(data.cost), price: new Prisma.Decimal(data.price) } });
+  if (data.quantity > 0) await prisma.stockMovement.create({ data: { productId: product.id, type: StockMovementType.ENTRADA, quantity: new Prisma.Decimal(data.quantity), previousStock: new Prisma.Decimal(0), resultingStock: new Prisma.Decimal(data.quantity), reason: "Stock inicial" } });
+  res.status(201).json(product);
+}));
+app.put("/api/products/:id", auth, asyncRoute(async (req, res) => {
+  const id = param(req, "id"); const data = productSchema.parse(req.body); const current = await prisma.product.findUniqueOrThrow({ where: { id } }); const next = new Prisma.Decimal(data.quantity); const diff = next.minus(current.quantity);
+  const product = await prisma.$transaction(async tx => {
+    const updated = await tx.product.update({ where: { id }, data: { ...data, sku: data.sku?.trim() || null, packageSize: data.packageSize == null ? null : new Prisma.Decimal(data.packageSize), quantity: next, minimum: new Prisma.Decimal(data.minimum), cost: new Prisma.Decimal(data.cost), price: new Prisma.Decimal(data.price) } });
+    if (!diff.isZero()) await tx.stockMovement.create({ data: { productId: id, type: StockMovementType.AJUSTE, quantity: diff, previousStock: current.quantity, resultingStock: next, reason: "Edición manual" } });
+    return updated;
+  });
+  res.json(product);
+}));
+app.post("/api/products/:id/movements", auth, asyncRoute(async (req, res) => {
+  const id = param(req, "id"); const data = movementSchema.parse(req.body);
+  const result = await prisma.$transaction(async tx => {
+    const product = await tx.product.findUniqueOrThrow({ where: { id } });
+    const raw = new Prisma.Decimal(data.quantity);
+    const signed = [StockMovementType.SALIDA, StockMovementType.CONSUMO_CITA, StockMovementType.VENTA, StockMovementType.MERMA].includes(data.type) ? raw.abs().negated() : data.type === StockMovementType.ENTRADA ? raw.abs() : raw;
+    const next = product.quantity.plus(signed); if (next.lessThan(0)) throw new Error("No hay suficiente stock.");
+    const updated = await tx.product.update({ where: { id }, data: { quantity: next } });
+    const movement = await tx.stockMovement.create({ data: { productId: id, appointmentId: data.appointmentId || null, type: data.type, quantity: signed, previousStock: product.quantity, resultingStock: next, reason: data.reason || null } });
+    return { product: updated, movement };
+  });
+  res.status(201).json(result);
+}));
+app.delete("/api/products/:id", auth, asyncRoute(async (req, res) => { await prisma.product.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
+
+app.get("/api/appointments", auth, asyncRoute(async (req, res) => {
+  const from = req.query.from ? new Date(String(req.query.from)) : new Date(new Date().setHours(0, 0, 0, 0));
+  const to = req.query.to ? new Date(String(req.query.to)) : new Date(from.getTime() + 31 * 86400000);
+  res.json(await prisma.appointment.findMany({ where: { startsAt: { gte: from, lt: to } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } }));
+}));
+app.post("/api/appointments", auth, asyncRoute(async (req, res) => {
+  const data = appointmentSchema.parse(req.body);
+  const catalog = await prisma.service.findMany({ where: { id: { in: data.services.map(service => service.serviceId) }, active: true } });
+  if (catalog.length !== data.services.length) throw new Error("Alguno de los servicios no existe o está desactivado.");
+  const lines = data.services.map(item => { const service = catalog.find(value => value.id === item.serviceId)!; const finalPrice = Number(service.price) * (1 - item.discount / 100); return { serviceId: service.id, serviceName: service.name, durationMin: service.durationMin, unitPrice: service.price, discount: new Prisma.Decimal(item.discount), finalPrice: new Prisma.Decimal(finalPrice) }; });
+  const totalMinutes = lines.reduce((sum, line) => sum + line.durationMin, 0); const startsAt = new Date(data.startsAt); const endsAt = new Date(startsAt.getTime() + totalMinutes * 60000); const total = lines.reduce((sum, line) => sum + Number(line.finalPrice), 0);
+  const appointment = await prisma.appointment.create({ data: { clientId: data.clientId, employeeId: data.employeeId, startsAt, endsAt, status: data.status, notes: data.notes, paid: data.paid, total: new Prisma.Decimal(total), services: { create: lines }, products: { create: data.products.map(product => ({ productId: product.productId, quantity: new Prisma.Decimal(product.quantity) })) } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } } });
+  res.status(201).json(appointment);
+}));
+app.put("/api/appointments/:id", auth, asyncRoute(async (req, res) => {
+  const id = param(req, "id"); const data = appointmentSchema.parse(req.body); const catalog = await prisma.service.findMany({ where: { id: { in: data.services.map(service => service.serviceId) } } });
+  const lines = data.services.map(item => { const service = catalog.find(value => value.id === item.serviceId); if (!service) throw new Error("Servicio no encontrado."); const finalPrice = Number(service.price) * (1 - item.discount / 100); return { serviceId: service.id, serviceName: service.name, durationMin: service.durationMin, unitPrice: service.price, discount: new Prisma.Decimal(item.discount), finalPrice: new Prisma.Decimal(finalPrice) }; });
+  const startsAt = new Date(data.startsAt); const endsAt = new Date(startsAt.getTime() + lines.reduce((sum, line) => sum + line.durationMin, 0) * 60000); const total = lines.reduce((sum, line) => sum + Number(line.finalPrice), 0);
+  const appointment = await prisma.$transaction(async tx => {
+    await tx.appointmentService.deleteMany({ where: { appointmentId: id } }); await tx.appointmentProduct.deleteMany({ where: { appointmentId: id } });
+    return tx.appointment.update({ where: { id }, data: { clientId: data.clientId, employeeId: data.employeeId, startsAt, endsAt, status: data.status, notes: data.notes, paid: data.paid, total: new Prisma.Decimal(total), services: { create: lines }, products: { create: data.products.map(product => ({ productId: product.productId, quantity: new Prisma.Decimal(product.quantity) })) } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } } });
+  });
+  res.json(appointment);
+}));
+app.post("/api/appointments/:id/finish", auth, asyncRoute(async (req, res) => {
+  const id = param(req, "id");
+  const result = await prisma.$transaction(async tx => {
+    const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { products: true } });
+    if (appointment.status === AppointmentStatus.FINALIZADA) return appointment;
+    for (const usage of appointment.products) {
+      const product = await tx.product.findUniqueOrThrow({ where: { id: usage.productId } }); const next = product.quantity.minus(usage.quantity); if (next.lessThan(0)) throw new Error(`No hay suficiente stock de ${product.name}.`);
+      await tx.product.update({ where: { id: product.id }, data: { quantity: next } });
+      await tx.stockMovement.create({ data: { productId: product.id, appointmentId: id, type: StockMovementType.CONSUMO_CITA, quantity: usage.quantity.negated(), previousStock: product.quantity, resultingStock: next, reason: "Consumo al finalizar cita" } });
+    }
+    return tx.appointment.update({ where: { id }, data: { status: AppointmentStatus.FINALIZADA } });
+  });
+  res.json(result);
+}));
+app.delete("/api/appointments/:id", auth, asyncRoute(async (req, res) => { await prisma.appointment.delete({ where: { id: param(req, "id") } }); res.status(204).end(); }));
+
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(error);
+  if (error instanceof z.ZodError) { res.status(400).json({ message: "Revisa los datos introducidos.", errors: error.issues }); return; }
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2002") { res.status(409).json({ message: "Ya existe un registro con esos datos únicos." }); return; }
+    if (error.code === "P2025") { res.status(404).json({ message: "Registro no encontrado." }); return; }
+  }
+  res.status(500).json({ message: error instanceof Error ? error.message : "Error interno del servidor." });
+});
+
+ensureAdmin()
+  .then(() => app.listen(port, "0.0.0.0", () => console.log(`Rachel Studio API escuchando en el puerto ${port}`)))
+  .catch(error => { console.error("No se pudo iniciar la aplicación:", error); process.exit(1); });
+
+async function shutdown(): Promise<void> { await prisma.$disconnect(); process.exit(0); }
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
