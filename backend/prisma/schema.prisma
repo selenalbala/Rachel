@@ -68,6 +68,7 @@ model Client {
   notes           String?
   lastService     String?
   googleSub       String?          @unique
+  passwordHash    String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   appointments    Appointment[]
@@ -115,6 +116,18 @@ model Service {
   category        Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   appointments    AppointmentService[]
   bookingRequests BookingRequestService[]
+  images          ServiceImage[]
+}
+
+model ServiceImage {
+  id        String   @id @default(cuid())
+  serviceId String
+  imageData String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, position])
 }
 
 model Product {
