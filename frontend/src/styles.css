@@ -1688,3 +1688,30 @@ td.actions{white-space:nowrap}
   }
   .client-access-card{padding:21px}
 }
+
+
+/* PORTADA LIMPIA CON LOGO REAL */
+.public-header{min-height:92px;padding:10px max(18px,calc((100vw - 1380px)/2));display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(18px)}
+.public-logo-link{display:flex;align-items:center;text-decoration:none}
+.public-logo{display:block;width:220px;max-width:42vw;height:62px;object-fit:contain;object-position:left center}
+.professional-access{padding:10px 15px;color:var(--ink);background:#F3EEE7;border:1px solid var(--line);border-radius:13px;text-decoration:none;font-weight:750;transition:.18s ease}
+.professional-access:hover{color:#fff;background:var(--ink);border-color:var(--ink)}
+.beauty-hero{width:min(1440px,100%);margin:0 auto;min-height:calc(100vh - 92px);display:block;overflow:hidden;border:0;border-radius:0;box-shadow:none;background:#F7F2EE}
+.beauty-carousel{position:relative;min-height:calc(100vh - 92px);overflow:hidden;background:linear-gradient(135deg,rgba(255,255,255,.28),rgba(255,255,255,0)),#E3D6C6}
+.beauty-carousel>article{position:absolute;inset:0;opacity:0;visibility:hidden;transform:scale(1.025);transition:opacity .8s ease,transform 1.2s ease,visibility .8s}
+.beauty-carousel>article.active{opacity:1;visibility:visible;transform:scale(1)}
+.beauty-carousel>article>img{width:100%;height:100%;object-fit:cover;display:block}
+.beauty-slide-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(0,0,0,.14)),linear-gradient(90deg,rgba(255,255,255,.18),transparent 45%,rgba(0,0,0,.08))}
+.beauty-carousel-empty{position:absolute;inset:0;min-height:0;padding:0;background:radial-gradient(circle at 20% 20%,rgba(255,255,255,.7),transparent 30%),linear-gradient(135deg,#F7F2EE,#E3D6C6)}
+.beauty-hero-overlay{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:30px;pointer-events:none}
+.beauty-hero-logo{width:min(760px,74vw);max-height:48vh;object-fit:contain;filter:drop-shadow(0 18px 38px rgba(255,255,255,.9))}
+.beauty-hero-actions{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;pointer-events:auto}
+.beauty-hero-actions a{min-width:170px;min-height:48px;text-decoration:none}
+.beauty-hero-actions .primary-button{color:#fff;background:#1B1C1F;border-color:#1B1C1F;box-shadow:0 12px 28px rgba(27,28,31,.18)}
+.beauty-hero-actions .secondary-button{color:#1B1C1F;background:rgba(255,255,255,.92);border-color:rgba(255,255,255,.85);box-shadow:0 12px 28px rgba(27,28,31,.09)}
+.beauty-carousel-arrow,.beauty-carousel-dots{z-index:5}
+.client-access-section{width:min(980px,calc(100% - 40px));margin:80px auto;padding:0}
+.client-access-heading{position:static;padding:0}
+.client-access-heading h2{margin:0 0 12px;font-size:clamp(38px,5vw,56px);line-height:1;letter-spacing:-.055em}
+.client-access-heading p{margin:0;color:var(--gray);font-size:16px;line-height:1.6}
+@media(max-width:700px){.public-header{min-height:76px;padding:8px 12px}.public-logo{width:160px;height:52px}.professional-access{padding:8px 10px;font-size:12px}.beauty-hero,.beauty-carousel{min-height:calc(100vh - 76px)}.beauty-hero-logo{width:88vw;max-height:40vh}.beauty-hero-actions{width:100%;display:grid}.beauty-hero-actions a{width:min(320px,86vw)}}
