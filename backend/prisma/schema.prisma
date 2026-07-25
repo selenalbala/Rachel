@@ -106,6 +106,7 @@ model Service {
   name            String
   categoryId      String?
   description     String?
+  imageData       String?
   durationMin     Int
   price           Decimal                 @db.Decimal(10, 2)
   active          Boolean                 @default(true)
