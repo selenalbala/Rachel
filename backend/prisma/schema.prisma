@@ -20,7 +20,14 @@ enum BookingRequestStatus { PENDIENTE ACEPTADA DENEGADA PROPUESTA_CANCELADA PROP
 enum ProductUnit { UNIDAD GRAMO MILILITRO LITRO }
 enum AbsenceType { VACACIONES BAJA ASUNTO_PERSONAL FORMACION OTRO }
 
-model User { id String @id @default(cuid()) name String email String @unique passwordHash String createdAt DateTime @default(now()) updatedAt DateTime @updatedAt }
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
 model Client {
   id String @id @default(cuid()) name String alias String? phone String? email String? @unique birthday DateTime? allergies String? notes String? lastService String? googleSub String? @unique createdAt DateTime @default(now()) updatedAt DateTime @updatedAt
   appointments Appointment[] bookingRequests BookingRequest[]
