@@ -5,13 +5,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import {
-  AppointmentStatus,
-  Prisma,
-  PrismaClient,
-  ProductUnit,
-  StockMovementType
-} from "@prisma/client";
+import { AppointmentStatus, BookingRequestStatus, Prisma, PrismaClient, ProductUnit, StockMovementType } from "@prisma/client";
 import { z } from "zod";
 
 const prisma = new PrismaClient();
@@ -19,284 +13,74 @@ const app = express();
 const port = Number(process.env.PORT || 8080);
 const jwtSecret = process.env.JWT_SECRET || "cambia-esta-clave";
 const frontendUrl = process.env.FRONTEND_URL || process.env.CORS_ORIGIN || "*";
+const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 
-app.use(helmet());
-app.use(cors({
-  origin: frontendUrl === "*" ? true : frontendUrl.split(",").map(value => value.trim()),
-  credentials: true
-}));
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(cors({ origin: frontendUrl === "*" ? true : frontendUrl.split(",").map(v => v.trim()), credentials: true }));
 app.use(express.json({ limit: "5mb" }));
 app.use(morgan("combined"));
 
 type AuthPayload = { userId: string; email: string };
 type AuthRequest = Request & { auth?: AuthPayload };
+const asyncRoute = (handler: (req: AuthRequest, res: Response, next: NextFunction) => Promise<void>) => (req: AuthRequest, res: Response, next: NextFunction) => { handler(req, res, next).catch(next); };
+const param = (req: Request, name: string) => { const value = req.params[name]; if (!value?.trim()) throw new Error(`Parámetro inválido: ${name}`); return value; };
+function auth(req: AuthRequest, res: Response, next: NextFunction): void { const value = req.headers.authorization; if (!value?.startsWith("Bearer ")) { res.status(401).json({ message: "Debes iniciar sesión." }); return; } try { req.auth = jwt.verify(value.slice(7), jwtSecret) as AuthPayload; next(); } catch { res.status(401).json({ message: "La sesión ha caducado." }); } }
 
-function asyncRoute(handler: (req: AuthRequest, res: Response, next: NextFunction) => Promise<void>) {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    handler(req, res, next).catch(next);
-  };
-}
+async function ensureAdmin() { const email = (process.env.ADMIN_EMAIL || "admin@rachelstudio.es").trim().toLowerCase(); const password = process.env.ADMIN_PASSWORD || "Rachel1234"; if (!await prisma.user.findUnique({ where: { email } })) await prisma.user.create({ data: { name: "Rachel Studio", email, passwordHash: await bcrypt.hash(password, 12) } }); }
+async function sendMail(subject: string, html: string, to = process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL) { const key=process.env.RESEND_API_KEY; if(!key||!to){console.log("Correo no enviado: configura RESEND_API_KEY y NOTIFICATION_EMAIL.");return;} const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json"},body:JSON.stringify({from:process.env.MAIL_FROM||"Rachel Studio <onboarding@resend.dev>",to:[to],subject,html})}); if(!response.ok) throw new Error(`No se pudo enviar el correo (${response.status}).`); }
+const fullAppointment = { client: true, employee: true, category: true, services: true, products: { include: { product: true } } } satisfies Prisma.AppointmentInclude;
+const fullRequest = { client: true, employee: true, category: true, services: true } satisfies Prisma.BookingRequestInclude;
 
-function param(req: Request, name: string): string {
-  const value = req.params[name];
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Parámetro inválido: ${name}`);
-  return value;
-}
+const clientSchema = z.object({ name: z.string().trim().min(2), alias: z.string().trim().optional().nullable(), phone: z.string().trim().min(6), email: z.union([z.string().trim().email(), z.literal(""), z.null()]).optional(), birthday: z.union([z.string(), z.null()]).optional(), allergies: z.string().optional().nullable(), notes: z.string().optional().nullable(), lastService: z.string().optional().nullable(), googleSub: z.string().optional().nullable() });
+const employeeSchema = z.object({ name: z.string().trim().min(2), specialty: z.string().optional().nullable(), phone: z.string().optional().nullable(), email: z.union([z.string().email(), z.literal(""), z.null()]).optional(), color: z.string().default("#B8A48A"), active: z.boolean().default(true) });
+const categorySchema = z.object({ name: z.string().trim().min(2), color: z.string().regex(/^#[0-9a-f]{6}$/i), active: z.boolean().default(true) });
+const serviceSchema = z.object({ name: z.string().trim().min(2), categoryId: z.string().optional().nullable(), description: z.string().optional().nullable(), durationMin: z.coerce.number().int().min(5), price: z.coerce.number().min(0), active: z.boolean().default(true) });
+const productSchema = z.object({ name: z.string().trim().min(2), brand: z.string().optional().nullable(), category: z.string().optional().nullable(), supplier: z.string().optional().nullable(), unit: z.nativeEnum(ProductUnit), quantity: z.coerce.number().min(0), minimum: z.coerce.number().min(0), cost: z.coerce.number().min(0), price: z.coerce.number().min(0), notes: z.string().optional().nullable(), active: z.boolean().default(true) });
+const appointmentSchema = z.object({ clientId: z.string().min(1), employeeId: z.string().min(1), startsAt: z.string().datetime(), status: z.nativeEnum(AppointmentStatus).default(AppointmentStatus.PENDIENTE), notes: z.string().optional().nullable(), paid: z.boolean().default(false), services: z.array(z.object({ serviceId: z.string().min(1), discount: z.coerce.number().min(0).max(100).default(0) })).min(1), products: z.array(z.object({ productId: z.string().min(1), quantity: z.coerce.number().positive() })).default([]) });
+const absenceSchema = z.object({ employeeId: z.string().min(1), startsAt: z.string().datetime(), endsAt: z.string().datetime(), type: z.enum(["VACACIONES","BAJA","ASUNTO_PERSONAL","FORMACION","OTRO"]), title: z.string().trim().min(2), notes: z.string().optional().nullable(), color: z.string().regex(/^#[0-9a-f]{6}$/i) });
+const publicBookingSchema = z.object({ name: z.string().trim().min(2), alias: z.string().trim().optional().nullable(), phone: z.string().trim().min(6), email: z.string().trim().email(), birthday: z.string().optional().nullable(), allergies: z.string().optional().nullable(), notes: z.string().optional().nullable(), googleCredential: z.string().optional(), employeeId: z.string().optional().nullable(), requestedAt: z.string().datetime(), serviceIds: z.array(z.string().min(1)).min(1) });
 
-function auth(req: AuthRequest, res: Response, next: NextFunction): void {
-  const value = req.headers.authorization;
-  if (!value?.startsWith("Bearer ")) {
-    res.status(401).json({ message: "Debes iniciar sesión." });
-    return;
-  }
-  try {
-    req.auth = jwt.verify(value.slice(7), jwtSecret) as AuthPayload;
-    next();
-  } catch {
-    res.status(401).json({ message: "La sesión ha caducado." });
-  }
-}
+async function appointmentData(data: z.infer<typeof appointmentSchema>) { const services = await prisma.service.findMany({ where: { id: { in: data.services.map(x => x.serviceId) }, active: true }, include: { category: true } }); if (services.length !== data.services.length) throw new Error("Alguno de los servicios no existe o está desactivado."); const lines = data.services.map(item => { const service = services.find(s => s.id === item.serviceId)!; const finalPrice = Number(service.price) * (1 - item.discount / 100); return { serviceId: service.id, serviceName: service.name, durationMin: service.durationMin, unitPrice: service.price, discount: new Prisma.Decimal(item.discount), finalPrice: new Prisma.Decimal(finalPrice) }; }); const startsAt = new Date(data.startsAt); const endsAt = new Date(startsAt.getTime() + lines.reduce((a,b) => a + b.durationMin, 0) * 60000); return { lines, startsAt, endsAt, total: new Prisma.Decimal(lines.reduce((a,b) => a + Number(b.finalPrice), 0)), categoryId: services[0]?.categoryId || null }; }
+async function isAvailable(startsAt: Date, endsAt: Date, employeeId?: string | null, ignoreAppointment?: string) { const employeeWhere = employeeId ? { employeeId } : {}; const overlap = { startsAt: { lt: endsAt }, endsAt: { gt: startsAt } }; const [appointment, absence] = await Promise.all([prisma.appointment.findFirst({ where: { ...employeeWhere, ...overlap, id: ignoreAppointment ? { not: ignoreAppointment } : undefined, status: { not: AppointmentStatus.CANCELADA } } }), prisma.absence.findFirst({ where: { ...(employeeId ? { employeeId } : {}), ...overlap } })]); return !appointment && !absence; }
 
-async function ensureAdmin(): Promise<void> {
-  const email = (process.env.ADMIN_EMAIL || "admin@rachelstudio.es").trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD || "Rachel1234";
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (!existing) {
-    await prisma.user.create({ data: { name: "Rachel Studio", email, passwordHash: await bcrypt.hash(password, 12) } });
-    console.log(`Usuario administrador creado: ${email}`);
-  }
-}
+app.get("/", (_req,res) => res.json({ name:"Rachel Studio API", status:"ok" }));
+app.get("/health", (_req,res) => res.json({ status:"ok" }));
+app.post("/auth/login", asyncRoute(async (req,res) => { const data = z.object({email:z.string().email(),password:z.string().min(6)}).parse(req.body); const user = await prisma.user.findUnique({where:{email:data.email.toLowerCase()}}); if (!user || !await bcrypt.compare(data.password,user.passwordHash)) { res.status(401).json({message:"Correo o contraseña incorrectos."}); return; } res.json({token:jwt.sign({userId:user.id,email:user.email},jwtSecret,{expiresIn:"7d"}),user:{id:user.id,name:user.name,email:user.email}}); }));
+app.get("/auth/me",auth,asyncRoute(async(req,res)=>{ const user=await prisma.user.findUnique({where:{id:req.auth!.userId},select:{id:true,name:true,email:true}}); if(!user){res.status(401).json({message:"Usuario no encontrado."});return;} res.json(user); }));
 
-const loginSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
-const clientSchema = z.object({
-  name: z.string().trim().min(2),
-  phone: z.string().optional().nullable(),
-  email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
-  birthday: z.union([z.string(), z.null()]).optional(),
-  allergies: z.string().optional().nullable(),
-  notes: z.string().optional().nullable(),
-  colorFormula: z.string().optional().nullable()
-});
-const employeeSchema = z.object({
-  name: z.string().trim().min(2),
-  specialty: z.string().optional().nullable(),
-  phone: z.string().optional().nullable(),
-  email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
-  color: z.string().default("#B8A48A"),
-  active: z.boolean().default(true)
-});
-const serviceSchema = z.object({
-  name: z.string().trim().min(2),
-  category: z.string().optional().nullable(),
-  description: z.string().optional().nullable(),
-  durationMin: z.coerce.number().int().min(5),
-  price: z.coerce.number().min(0),
-  color: z.string().default("#E3D6C6"),
-  active: z.boolean().default(true)
-});
-const productSchema = z.object({
-  name: z.string().trim().min(2),
-  brand: z.string().optional().nullable(),
-  category: z.string().optional().nullable(),
-  supplier: z.string().optional().nullable(),
-  sku: z.string().optional().nullable(),
-  unit: z.nativeEnum(ProductUnit),
-  packageSize: z.coerce.number().min(0).optional().nullable(),
-  quantity: z.coerce.number().min(0),
-  minimum: z.coerce.number().min(0),
-  cost: z.coerce.number().min(0),
-  price: z.coerce.number().min(0),
-  notes: z.string().optional().nullable(),
-  active: z.boolean().default(true)
-});
-const movementSchema = z.object({
-  type: z.nativeEnum(StockMovementType),
-  quantity: z.coerce.number().refine(value => value !== 0, "La cantidad no puede ser cero."),
-  reason: z.string().optional().nullable(),
-  appointmentId: z.string().optional().nullable()
-});
-const appointmentSchema = z.object({
-  clientId: z.string().min(1),
-  employeeId: z.string().min(1),
-  startsAt: z.string().datetime(),
-  status: z.nativeEnum(AppointmentStatus).default(AppointmentStatus.PENDIENTE),
-  notes: z.string().optional().nullable(),
-  paid: z.boolean().default(false),
-  services: z.array(z.object({ serviceId: z.string().min(1), discount: z.coerce.number().min(0).max(100).default(0) })).min(1),
-  products: z.array(z.object({ productId: z.string().min(1), quantity: z.coerce.number().positive() })).default([])
-});
+app.get("/public/catalog", asyncRoute(async (_req,res)=>{ const [services,employees,categories]=await Promise.all([prisma.service.findMany({where:{active:true},include:{category:true},orderBy:{name:"asc"}}),prisma.employee.findMany({where:{active:true},select:{id:true,name:true,specialty:true}}),prisma.category.findMany({where:{active:true},orderBy:{name:"asc"}})]); res.json({services,employees,categories,googleClientId:googleClientId||null}); }));
+app.get("/public/availability", asyncRoute(async(req,res)=>{ const from=new Date(String(req.query.from)); const to=new Date(String(req.query.to)); const employeeId=String(req.query.employeeId||"")||undefined; const [appointments,absences]=await Promise.all([prisma.appointment.findMany({where:{startsAt:{gte:from,lt:to},status:{not:AppointmentStatus.CANCELADA},...(employeeId?{employeeId}:{})},select:{startsAt:true,endsAt:true,employeeId:true}}),prisma.absence.findMany({where:{startsAt:{lt:to},endsAt:{gt:from},...(employeeId?{employeeId}:{})},select:{startsAt:true,endsAt:true,employeeId:true,title:true,color:true}})]); res.json({appointments,absences,workHours:{start:7,end:21}}); }));
+app.post("/public/bookings", asyncRoute(async(req,res)=>{ const data=publicBookingSchema.parse(req.body); let googleSub:string|undefined; if(data.googleCredential && googleClientId){const response=await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(data.googleCredential)}`);if(!response.ok)throw new Error("No se pudo validar la cuenta de Google.");const payload:any=await response.json();if(payload.aud!==googleClientId||payload.email!==data.email)throw new Error("El correo de Google no coincide con el formulario.");googleSub=payload.sub;} const services=await prisma.service.findMany({where:{id:{in:data.serviceIds},active:true},include:{category:true}}); if(services.length!==data.serviceIds.length)throw new Error("Selecciona servicios válidos."); const requestedAt=new Date(data.requestedAt); const endsAt=new Date(requestedAt.getTime()+services.reduce((s,x)=>s+x.durationMin,0)*60000); if(!await isAvailable(requestedAt,endsAt,data.employeeId))throw new Error("Ese horario ya no está disponible."); const client=await prisma.client.upsert({where:{email:data.email},create:{name:data.name,alias:data.alias||null,phone:data.phone,email:data.email,birthday:data.birthday?new Date(data.birthday):null,allergies:data.allergies||null,notes:data.notes||null,googleSub},update:{name:data.name,alias:data.alias||null,phone:data.phone,birthday:data.birthday?new Date(data.birthday):null,allergies:data.allergies||null,googleSub:googleSub||undefined}}); const booking=await prisma.bookingRequest.create({data:{clientId:client.id,employeeId:data.employeeId||null,categoryId:services[0]?.categoryId||null,requestedAt,notes:data.notes||null,services:{create:services.map(s=>({serviceId:s.id,serviceName:s.name,durationMin:s.durationMin,price:s.price}))}},include:fullRequest}); await sendMail(`Nueva solicitud de cita · ${client.name}`,`<h2>Nueva solicitud</h2><p><b>${client.name}</b> (${client.phone})</p><p>${requestedAt.toLocaleString("es-ES")}</p><p>${services.map(s=>s.name).join(" + ")}</p><p>Entra en Rachel Studio para aceptar, denegar o proponer otra hora.</p>`); res.status(201).json({message:"Solicitud enviada. Te avisaremos por correo cuando sea revisada.",id:booking.id}); }));
 
-app.get("/", (_req, res) => res.json({ name: "Rachel Studio API", status: "ok" }));
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/dashboard",auth,asyncRoute(async(_req,res)=>{const start=new Date();start.setHours(0,0,0,0);const end=new Date(start);end.setDate(end.getDate()+1);const [todayAppointments,absences,clients,products,requests]=await Promise.all([prisma.appointment.findMany({where:{startsAt:{gte:start,lt:end},status:{not:AppointmentStatus.CANCELADA}},include:fullAppointment,orderBy:{startsAt:"asc"}}),prisma.absence.findMany({where:{startsAt:{lt:end},endsAt:{gt:start}},include:{employee:true},orderBy:{startsAt:"asc"}}),prisma.client.count(),prisma.product.findMany({where:{active:true}}),prisma.bookingRequest.count({where:{status:BookingRequestStatus.PENDIENTE}})]);const low=products.filter(p=>Number(p.quantity)<=Number(p.minimum));res.json({todayAppointments,absences,clients,lowStock:low.length,lowProducts:low.slice(0,5),pendingRequests:requests,todayRevenue:todayAppointments.filter(x=>x.status===AppointmentStatus.FINALIZADA).reduce((s,x)=>s+Number(x.total),0)}); }));
 
-app.post("/auth/login", asyncRoute(async (req, res) => {
-  const data = loginSchema.parse(req.body);
-  const user = await prisma.user.findUnique({ where: { email: data.email.trim().toLowerCase() } });
-  if (!user || !(await bcrypt.compare(data.password, user.passwordHash))) {
-    res.status(401).json({ message: "Correo o contraseña incorrectos." });
-    return;
-  }
-  const token = jwt.sign({ userId: user.id, email: user.email } satisfies AuthPayload, jwtSecret, { expiresIn: "7d" });
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
-}));
+app.get("/api/clients",auth,asyncRoute(async(req,res)=>{const search=String(req.query.search||"").trim();res.json(await prisma.client.findMany({where:search?{OR:[{name:{contains:search,mode:"insensitive"}},{alias:{contains:search,mode:"insensitive"}},{phone:{contains:search,mode:"insensitive"}},{email:{contains:search,mode:"insensitive"}}]}:undefined,orderBy:{name:"asc"}}));}));
+app.get("/api/clients/:id",auth,asyncRoute(async(req,res)=>{res.json(await prisma.client.findUniqueOrThrow({where:{id:param(req,"id")},include:{appointments:{include:fullAppointment,orderBy:{startsAt:"desc"}}}}));}));
+app.post("/api/clients",auth,asyncRoute(async(req,res)=>{const d=clientSchema.parse(req.body);res.status(201).json(await prisma.client.create({data:{...d,email:d.email||null,birthday:d.birthday?new Date(d.birthday):null}}));}));
+app.put("/api/clients/:id",auth,asyncRoute(async(req,res)=>{const d=clientSchema.parse(req.body);res.json(await prisma.client.update({where:{id:param(req,"id")},data:{...d,email:d.email||null,birthday:d.birthday?new Date(d.birthday):null}}));}));
+app.delete("/api/clients/:id",auth,asyncRoute(async(req,res)=>{await prisma.client.delete({where:{id:param(req,"id")}});res.status(204).end();}));
 
-app.get("/auth/me", auth, asyncRoute(async (req, res) => {
-  const user = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { id: true, name: true, email: true } });
-  if (!user) { res.status(401).json({ message: "Usuario no encontrado." }); return; }
-  res.json(user);
-}));
+for(const [path,model,schema] of [["employees","employee",employeeSchema],["categories","category",categorySchema]] as const){app.get(`/api/${path}`,auth,asyncRoute(async(_req,res)=>{res.json(await (prisma[model] as any).findMany({orderBy:{name:"asc"}}));}));app.post(`/api/${path}`,auth,asyncRoute(async(req,res)=>{res.status(201).json(await (prisma[model] as any).create({data:schema.parse(req.body)}));}));app.put(`/api/${path}/:id`,auth,asyncRoute(async(req,res)=>{res.json(await (prisma[model] as any).update({where:{id:param(req,"id")},data:schema.parse(req.body)}));}));}
 
-app.get("/api/dashboard", auth, asyncRoute(async (_req, res) => {
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(start); end.setDate(end.getDate() + 1);
-  const monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
-  const [clients, allProducts, todayAppointments, monthAppointments, nextAppointment] = await Promise.all([
-    prisma.client.count(),
-    prisma.product.findMany({ where: { active: true } }),
-    prisma.appointment.findMany({ where: { startsAt: { gte: start, lt: end }, status: { not: AppointmentStatus.CANCELADA } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } }),
-    prisma.appointment.findMany({ where: { startsAt: { gte: monthStart }, status: AppointmentStatus.FINALIZADA }, select: { total: true } }),
-    prisma.appointment.findFirst({ where: { startsAt: { gte: new Date() }, status: { in: [AppointmentStatus.PENDIENTE, AppointmentStatus.CONFIRMADA] } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } })
-  ]);
-  const lowProducts = allProducts.filter(product => Number(product.quantity) <= Number(product.minimum));
-  const todayRevenue = todayAppointments.filter(appointment => appointment.status === AppointmentStatus.FINALIZADA).reduce((sum, appointment) => sum + Number(appointment.total), 0);
-  const monthRevenue = monthAppointments.reduce((sum, appointment) => sum + Number(appointment.total), 0);
-  res.json({ clients, products: allProducts.length, lowStock: lowProducts.length, lowProducts: lowProducts.slice(0, 5), todayAppointments, todayRevenue, monthRevenue, nextAppointment });
-}));
+app.get("/api/services",auth,asyncRoute(async(_req,res)=>{res.json(await prisma.service.findMany({include:{category:true},orderBy:{name:"asc"}}));}));
+app.post("/api/services",auth,asyncRoute(async(req,res)=>{const d=serviceSchema.parse(req.body);res.status(201).json(await prisma.service.create({data:{...d,price:new Prisma.Decimal(d.price)},include:{category:true}}));}));
+app.put("/api/services/:id",auth,asyncRoute(async(req,res)=>{const d=serviceSchema.parse(req.body);res.json(await prisma.service.update({where:{id:param(req,"id")},data:{...d,price:new Prisma.Decimal(d.price)},include:{category:true}}));}));
 
-app.get("/api/clients", auth, asyncRoute(async (req, res) => {
-  const search = String(req.query.search || "").trim();
-  res.json(await prisma.client.findMany({
-    where: search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { phone: { contains: search, mode: "insensitive" } }, { email: { contains: search, mode: "insensitive" } }] } : undefined,
-    orderBy: { name: "asc" }
-  }));
-}));
-app.get("/api/clients/:id", auth, asyncRoute(async (req, res) => {
-  res.json(await prisma.client.findUniqueOrThrow({ where: { id: param(req, "id") }, include: { appointments: { include: { employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "desc" } } } }));
-}));
-app.post("/api/clients", auth, asyncRoute(async (req, res) => {
-  const data = clientSchema.parse(req.body);
-  res.status(201).json(await prisma.client.create({ data: { ...data, email: data.email || null, birthday: data.birthday ? new Date(data.birthday) : null } }));
-}));
-app.put("/api/clients/:id", auth, asyncRoute(async (req, res) => {
-  const data = clientSchema.parse(req.body);
-  res.json(await prisma.client.update({ where: { id: param(req, "id") }, data: { ...data, email: data.email || null, birthday: data.birthday ? new Date(data.birthday) : null } }));
-}));
-app.delete("/api/clients/:id", auth, asyncRoute(async (req, res) => { await prisma.client.delete({ where: { id: param(req, "id") } }); res.status(204).end(); }));
+app.get("/api/products",auth,asyncRoute(async(req,res)=>{const search=String(req.query.search||"").trim();res.json(await prisma.product.findMany({where:search?{OR:[{name:{contains:search,mode:"insensitive"}},{brand:{contains:search,mode:"insensitive"}}]}:undefined,include:{movements:{take:15,orderBy:{createdAt:"desc"}}},orderBy:{name:"asc"}}));}));
+app.post("/api/products",auth,asyncRoute(async(req,res)=>{const d=productSchema.parse(req.body);const product=await prisma.product.create({data:{...d,quantity:new Prisma.Decimal(d.quantity),minimum:new Prisma.Decimal(d.minimum),cost:new Prisma.Decimal(d.cost),price:new Prisma.Decimal(d.price)}});if(d.quantity>0)await prisma.stockMovement.create({data:{productId:product.id,type:StockMovementType.ENTRADA,quantity:new Prisma.Decimal(d.quantity),previousStock:new Prisma.Decimal(0),resultingStock:new Prisma.Decimal(d.quantity),reason:"Stock inicial"}});res.status(201).json(product);}));
+app.put("/api/products/:id",auth,asyncRoute(async(req,res)=>{const d=productSchema.parse(req.body);res.json(await prisma.product.update({where:{id:param(req,"id")},data:{...d,quantity:new Prisma.Decimal(d.quantity),minimum:new Prisma.Decimal(d.minimum),cost:new Prisma.Decimal(d.cost),price:new Prisma.Decimal(d.price)}}));}));
 
-app.get("/api/employees", auth, asyncRoute(async (_req, res) => {
-  const employees = await prisma.employee.findMany({ orderBy: { name: "asc" } });
-  res.json(employees);
-}));
-app.post("/api/employees", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.status(201).json(await prisma.employee.create({ data: { ...data, email: data.email || null } })); }));
-app.put("/api/employees/:id", auth, asyncRoute(async (req, res) => { const data = employeeSchema.parse(req.body); res.json(await prisma.employee.update({ where: { id: param(req, "id") }, data: { ...data, email: data.email || null } })); }));
-app.delete("/api/employees/:id", auth, asyncRoute(async (req, res) => { await prisma.employee.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
+app.get("/api/appointments",auth,asyncRoute(async(req,res)=>{const from=req.query.from?new Date(String(req.query.from)):new Date(new Date().setHours(0,0,0,0));const to=req.query.to?new Date(String(req.query.to)):new Date(from.getTime()+35*86400000);res.json(await prisma.appointment.findMany({where:{startsAt:{gte:from,lt:to},status:{not:AppointmentStatus.CANCELADA}},include:fullAppointment,orderBy:{startsAt:"asc"}}));}));
+app.post("/api/appointments",auth,asyncRoute(async(req,res)=>{const d=appointmentSchema.parse(req.body);const calc=await appointmentData(d);if(!await isAvailable(calc.startsAt,calc.endsAt,d.employeeId))throw new Error("La empleada no está disponible en ese horario.");res.status(201).json(await prisma.appointment.create({data:{clientId:d.clientId,employeeId:d.employeeId,categoryId:calc.categoryId,startsAt:calc.startsAt,endsAt:calc.endsAt,status:d.status,notes:d.notes,paid:d.paid,total:calc.total,services:{create:calc.lines},products:{create:d.products.map(p=>({productId:p.productId,quantity:new Prisma.Decimal(p.quantity)}))}},include:fullAppointment}));}));
+app.put("/api/appointments/:id",auth,asyncRoute(async(req,res)=>{const id=param(req,"id"),d=appointmentSchema.parse(req.body),calc=await appointmentData(d);if(!await isAvailable(calc.startsAt,calc.endsAt,d.employeeId,id))throw new Error("La empleada no está disponible en ese horario.");const result=await prisma.$transaction(async tx=>{await tx.appointmentService.deleteMany({where:{appointmentId:id}});await tx.appointmentProduct.deleteMany({where:{appointmentId:id}});return tx.appointment.update({where:{id},data:{clientId:d.clientId,employeeId:d.employeeId,categoryId:calc.categoryId,startsAt:calc.startsAt,endsAt:calc.endsAt,status:d.status,notes:d.notes,paid:d.paid,total:calc.total,services:{create:calc.lines},products:{create:d.products.map(p=>({productId:p.productId,quantity:new Prisma.Decimal(p.quantity)}))}},include:fullAppointment});});res.json(result);}));
+app.post("/api/appointments/:id/cancel",auth,asyncRoute(async(req,res)=>{const reason=z.object({reason:z.string().optional()}).parse(req.body).reason;res.json(await prisma.appointment.update({where:{id:param(req,"id")},data:{status:AppointmentStatus.CANCELADA,cancelledAt:new Date(),cancellationReason:reason||null},include:fullAppointment}));}));
 
-app.get("/api/services", auth, asyncRoute(async (_req, res) => {
-  const services = await prisma.service.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }] });
-  res.json(services);
-}));
-app.post("/api/services", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.status(201).json(await prisma.service.create({ data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
-app.put("/api/services/:id", auth, asyncRoute(async (req, res) => { const data = serviceSchema.parse(req.body); res.json(await prisma.service.update({ where: { id: param(req, "id") }, data: { ...data, price: new Prisma.Decimal(data.price) } })); }));
-app.delete("/api/services/:id", auth, asyncRoute(async (req, res) => { await prisma.service.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
+app.get("/api/absences",auth,asyncRoute(async(req,res)=>{const from=req.query.from?new Date(String(req.query.from)):new Date(0),to=req.query.to?new Date(String(req.query.to)):new Date("2999-01-01");res.json(await prisma.absence.findMany({where:{startsAt:{lt:to},endsAt:{gt:from}},include:{employee:true},orderBy:{startsAt:"asc"}}));}));
+app.post("/api/absences",auth,asyncRoute(async(req,res)=>{const d=absenceSchema.parse(req.body);if(new Date(d.endsAt)<=new Date(d.startsAt))throw new Error("La fecha final debe ser posterior a la inicial.");res.status(201).json(await prisma.absence.create({data:{...d,startsAt:new Date(d.startsAt),endsAt:new Date(d.endsAt)},include:{employee:true}}));}));
+app.delete("/api/absences/:id",auth,asyncRoute(async(req,res)=>{await prisma.absence.delete({where:{id:param(req,"id")}});res.status(204).end();}));
 
-app.get("/api/products", auth, asyncRoute(async (req, res) => {
-  const search = String(req.query.search || "").trim();
-  res.json(await prisma.product.findMany({ where: search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { brand: { contains: search, mode: "insensitive" } }, { sku: { contains: search, mode: "insensitive" } }] } : undefined, orderBy: { name: "asc" }, include: { movements: { take: 15, orderBy: { createdAt: "desc" } } } }));
-}));
-app.post("/api/products", auth, asyncRoute(async (req, res) => {
-  const data = productSchema.parse(req.body);
-  const product = await prisma.product.create({ data: { ...data, sku: data.sku?.trim() || null, packageSize: data.packageSize == null ? null : new Prisma.Decimal(data.packageSize), quantity: new Prisma.Decimal(data.quantity), minimum: new Prisma.Decimal(data.minimum), cost: new Prisma.Decimal(data.cost), price: new Prisma.Decimal(data.price) } });
-  if (data.quantity > 0) await prisma.stockMovement.create({ data: { productId: product.id, type: StockMovementType.ENTRADA, quantity: new Prisma.Decimal(data.quantity), previousStock: new Prisma.Decimal(0), resultingStock: new Prisma.Decimal(data.quantity), reason: "Stock inicial" } });
-  res.status(201).json(product);
-}));
-app.put("/api/products/:id", auth, asyncRoute(async (req, res) => {
-  const id = param(req, "id"); const data = productSchema.parse(req.body); const current = await prisma.product.findUniqueOrThrow({ where: { id } }); const next = new Prisma.Decimal(data.quantity); const diff = next.minus(current.quantity);
-  const product = await prisma.$transaction(async tx => {
-    const updated = await tx.product.update({ where: { id }, data: { ...data, sku: data.sku?.trim() || null, packageSize: data.packageSize == null ? null : new Prisma.Decimal(data.packageSize), quantity: next, minimum: new Prisma.Decimal(data.minimum), cost: new Prisma.Decimal(data.cost), price: new Prisma.Decimal(data.price) } });
-    if (!diff.isZero()) await tx.stockMovement.create({ data: { productId: id, type: StockMovementType.AJUSTE, quantity: diff, previousStock: current.quantity, resultingStock: next, reason: "Edición manual" } });
-    return updated;
-  });
-  res.json(product);
-}));
-app.post("/api/products/:id/movements", auth, asyncRoute(async (req, res) => {
-  const id = param(req, "id"); const data = movementSchema.parse(req.body);
-  const result = await prisma.$transaction(async tx => {
-    const product = await tx.product.findUniqueOrThrow({ where: { id } });
-    const raw = new Prisma.Decimal(data.quantity);
-    const isOutgoing =
-      data.type === StockMovementType.SALIDA ||
-      data.type === StockMovementType.CONSUMO_CITA ||
-      data.type === StockMovementType.VENTA ||
-      data.type === StockMovementType.MERMA;
+app.get("/api/booking-requests",auth,asyncRoute(async(_req,res)=>{res.json(await prisma.bookingRequest.findMany({include:fullRequest,orderBy:{createdAt:"desc"}}));}));
+app.post("/api/booking-requests/:id/decision",auth,asyncRoute(async(req,res)=>{const id=param(req,"id");const d=z.object({action:z.enum(["accept","deny","propose"]),proposedAt:z.string().datetime().optional(),employeeId:z.string().optional(),notes:z.string().optional()}).parse(req.body);const booking=await prisma.bookingRequest.findUniqueOrThrow({where:{id},include:fullRequest});if(d.action==="deny"){const updated=await prisma.bookingRequest.update({where:{id},data:{status:BookingRequestStatus.DENEGADA,adminNotes:d.notes||null},include:fullRequest});await sendMail("Solicitud de cita no disponible",`<p>Hola ${booking.client.alias||booking.client.name}, no podemos confirmar el horario solicitado.</p><p>${d.notes||"Puedes enviar una nueva solicitud desde la web."}</p>`,booking.client.email||undefined);res.json(updated);return;}if(d.action==="propose"){if(!d.proposedAt)throw new Error("Indica la nueva fecha y hora.");const updated=await prisma.bookingRequest.update({where:{id},data:{status:BookingRequestStatus.PROPUESTA_ENVIADA,proposedAt:new Date(d.proposedAt),employeeId:d.employeeId||booking.employeeId,adminNotes:d.notes||null},include:fullRequest});await sendMail("Te proponemos otra hora",`<p>Hola ${booking.client.alias||booking.client.name}, te proponemos <b>${new Date(d.proposedAt).toLocaleString("es-ES")}</b>.</p><p>${d.notes||"Responde a este correo para confirmarla."}</p>`,booking.client.email||undefined);res.json(updated);return;}const employeeId=d.employeeId||booking.employeeId;if(!employeeId)throw new Error("Selecciona una empleada.");const start=booking.proposedAt||booking.requestedAt;const end=new Date(start.getTime()+booking.services.reduce((s,x)=>s+x.durationMin,0)*60000);if(!await isAvailable(start,end,employeeId))throw new Error("Ese horario ya no está disponible.");const appointment=await prisma.appointment.create({data:{clientId:booking.clientId,employeeId,categoryId:booking.categoryId,startsAt:start,endsAt:end,status:AppointmentStatus.CONFIRMADA,notes:booking.notes,total:new Prisma.Decimal(booking.services.reduce((s,x)=>s+Number(x.price),0)),services:{create:booking.services.map(x=>({serviceId:x.serviceId,serviceName:x.serviceName,durationMin:x.durationMin,unitPrice:x.price,discount:new Prisma.Decimal(0),finalPrice:x.price}))}},include:fullAppointment});await prisma.bookingRequest.update({where:{id},data:{status:BookingRequestStatus.ACEPTADA,employeeId}});await prisma.client.update({where:{id:booking.clientId},data:{lastService:booking.services.map(x=>x.serviceName).join(" + ")}});await sendMail("Cita confirmada",`<p>Hola ${booking.client.alias||booking.client.name}, tu cita queda confirmada para <b>${start.toLocaleString("es-ES")}</b>.</p>`,booking.client.email||undefined);res.json(appointment);}));
 
-    const signed = isOutgoing
-      ? raw.abs().negated()
-      : data.type === StockMovementType.ENTRADA
-        ? raw.abs()
-        : raw;
-    const next = product.quantity.plus(signed); if (next.lessThan(0)) throw new Error("No hay suficiente stock.");
-    const updated = await tx.product.update({ where: { id }, data: { quantity: next } });
-    const movement = await tx.stockMovement.create({ data: { productId: id, appointmentId: data.appointmentId || null, type: data.type, quantity: signed, previousStock: product.quantity, resultingStock: next, reason: data.reason || null } });
-    return { product: updated, movement };
-  });
-  res.status(201).json(result);
-}));
-app.delete("/api/products/:id", auth, asyncRoute(async (req, res) => { await prisma.product.update({ where: { id: param(req, "id") }, data: { active: false } }); res.status(204).end(); }));
-
-app.get("/api/appointments", auth, asyncRoute(async (req, res) => {
-  const from = req.query.from ? new Date(String(req.query.from)) : new Date(new Date().setHours(0, 0, 0, 0));
-  const to = req.query.to ? new Date(String(req.query.to)) : new Date(from.getTime() + 31 * 86400000);
-  res.json(await prisma.appointment.findMany({ where: { startsAt: { gte: from, lt: to } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } }, orderBy: { startsAt: "asc" } }));
-}));
-app.post("/api/appointments", auth, asyncRoute(async (req, res) => {
-  const data = appointmentSchema.parse(req.body);
-  const catalog = await prisma.service.findMany({ where: { id: { in: data.services.map(service => service.serviceId) }, active: true } });
-  if (catalog.length !== data.services.length) throw new Error("Alguno de los servicios no existe o está desactivado.");
-  const lines = data.services.map(item => { const service = catalog.find(value => value.id === item.serviceId)!; const finalPrice = Number(service.price) * (1 - item.discount / 100); return { serviceId: service.id, serviceName: service.name, durationMin: service.durationMin, unitPrice: service.price, discount: new Prisma.Decimal(item.discount), finalPrice: new Prisma.Decimal(finalPrice) }; });
-  const totalMinutes = lines.reduce((sum, line) => sum + line.durationMin, 0); const startsAt = new Date(data.startsAt); const endsAt = new Date(startsAt.getTime() + totalMinutes * 60000); const total = lines.reduce((sum, line) => sum + Number(line.finalPrice), 0);
-  const appointment = await prisma.appointment.create({ data: { clientId: data.clientId, employeeId: data.employeeId, startsAt, endsAt, status: data.status, notes: data.notes, paid: data.paid, total: new Prisma.Decimal(total), services: { create: lines }, products: { create: data.products.map(product => ({ productId: product.productId, quantity: new Prisma.Decimal(product.quantity) })) } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } } });
-  res.status(201).json(appointment);
-}));
-app.put("/api/appointments/:id", auth, asyncRoute(async (req, res) => {
-  const id = param(req, "id"); const data = appointmentSchema.parse(req.body); const catalog = await prisma.service.findMany({ where: { id: { in: data.services.map(service => service.serviceId) } } });
-  const lines = data.services.map(item => { const service = catalog.find(value => value.id === item.serviceId); if (!service) throw new Error("Servicio no encontrado."); const finalPrice = Number(service.price) * (1 - item.discount / 100); return { serviceId: service.id, serviceName: service.name, durationMin: service.durationMin, unitPrice: service.price, discount: new Prisma.Decimal(item.discount), finalPrice: new Prisma.Decimal(finalPrice) }; });
-  const startsAt = new Date(data.startsAt); const endsAt = new Date(startsAt.getTime() + lines.reduce((sum, line) => sum + line.durationMin, 0) * 60000); const total = lines.reduce((sum, line) => sum + Number(line.finalPrice), 0);
-  const appointment = await prisma.$transaction(async tx => {
-    await tx.appointmentService.deleteMany({ where: { appointmentId: id } }); await tx.appointmentProduct.deleteMany({ where: { appointmentId: id } });
-    return tx.appointment.update({ where: { id }, data: { clientId: data.clientId, employeeId: data.employeeId, startsAt, endsAt, status: data.status, notes: data.notes, paid: data.paid, total: new Prisma.Decimal(total), services: { create: lines }, products: { create: data.products.map(product => ({ productId: product.productId, quantity: new Prisma.Decimal(product.quantity) })) } }, include: { client: true, employee: true, services: true, products: { include: { product: true } } } });
-  });
-  res.json(appointment);
-}));
-app.post("/api/appointments/:id/finish", auth, asyncRoute(async (req, res) => {
-  const id = param(req, "id");
-  const result = await prisma.$transaction(async tx => {
-    const appointment = await tx.appointment.findUniqueOrThrow({ where: { id }, include: { products: true } });
-    if (appointment.status === AppointmentStatus.FINALIZADA) return appointment;
-    for (const usage of appointment.products) {
-      const product = await tx.product.findUniqueOrThrow({ where: { id: usage.productId } }); const next = product.quantity.minus(usage.quantity); if (next.lessThan(0)) throw new Error(`No hay suficiente stock de ${product.name}.`);
-      await tx.product.update({ where: { id: product.id }, data: { quantity: next } });
-      await tx.stockMovement.create({ data: { productId: product.id, appointmentId: id, type: StockMovementType.CONSUMO_CITA, quantity: usage.quantity.negated(), previousStock: product.quantity, resultingStock: next, reason: "Consumo al finalizar cita" } });
-    }
-    return tx.appointment.update({ where: { id }, data: { status: AppointmentStatus.FINALIZADA } });
-  });
-  res.json(result);
-}));
-app.delete("/api/appointments/:id", auth, asyncRoute(async (req, res) => { await prisma.appointment.delete({ where: { id: param(req, "id") } }); res.status(204).end(); }));
-
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(error);
-  if (error instanceof z.ZodError) { res.status(400).json({ message: "Revisa los datos introducidos.", errors: error.issues }); return; }
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (error.code === "P2002") { res.status(409).json({ message: "Ya existe un registro con esos datos únicos." }); return; }
-    if (error.code === "P2025") { res.status(404).json({ message: "Registro no encontrado." }); return; }
-  }
-  res.status(500).json({ message: error instanceof Error ? error.message : "Error interno del servidor." });
-});
-
-ensureAdmin()
-  .then(() => app.listen(port, "0.0.0.0", () => console.log(`Rachel Studio API escuchando en el puerto ${port}`)))
-  .catch(error => { console.error("No se pudo iniciar la aplicación:", error); process.exit(1); });
-
-async function shutdown(): Promise<void> { await prisma.$disconnect(); process.exit(0); }
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+app.use((error:unknown,_req:Request,res:Response,_next:NextFunction)=>{console.error(error);if(error instanceof z.ZodError){const fields=Object.fromEntries(error.issues.map(i=>[String(i.path[0]||"form"),i.message]));res.status(400).json({message:"Revisa los campos marcados.",fields});return;}if(error instanceof Prisma.PrismaClientKnownRequestError){if(error.code==="P2002"){res.status(409).json({message:"Ya existe un registro con esos datos."});return;}if(error.code==="P2025"){res.status(404).json({message:"Registro no encontrado."});return;}}res.status(500).json({message:error instanceof Error?error.message:"Error interno del servidor."});});
+ensureAdmin().then(()=>app.listen(port,"0.0.0.0",()=>console.log(`Rachel Studio API en ${port}`))).catch(e=>{console.error(e);process.exit(1);});
