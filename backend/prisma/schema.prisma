@@ -130,6 +130,15 @@ model ServiceImage {
   @@index([serviceId, position])
 }
 
+model HeroImage {
+  id        String   @id @default(cuid())
+  imageData String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([position])
+}
+
 model Product {
   id        String               @id @default(cuid())
   name      String

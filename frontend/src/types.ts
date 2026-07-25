@@ -2,6 +2,7 @@ export type User={id:string;name:string;email:string};
 export type Category={id:string;name:string;color:string;active:boolean};
 export type PublicClient={id:string;name:string;alias?:string|null;phone?:string|null;email:string;birthday?:string|null;allergies?:string|null};
 export type ServiceImage={id?:string;imageData:string;position?:number};
+export type HeroImage={id?:string;imageData:string;position?:number};
 export type Client={id:string;name:string;alias?:string|null;phone?:string|null;email?:string|null;birthday?:string|null;allergies?:string|null;notes?:string|null;lastService?:string|null;appointments?:Appointment[]};
 export type Employee={id:string;name:string;specialty?:string|null;phone?:string|null;email?:string|null;color:string;active:boolean};
 export type Service={id:string;name:string;categoryId?:string|null;category?:Category|null;description?:string|null;imageData?:string|null;images?:ServiceImage[];durationMin:number;price:string|number;active:boolean};
