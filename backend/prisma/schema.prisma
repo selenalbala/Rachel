@@ -1,5 +1,11 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
 enum StockMovementType { ENTRADA SALIDA AJUSTE CONSUMO_CITA VENTA MERMA }
 enum AppointmentStatus { PENDIENTE CONFIRMADA EN_CURSO FINALIZADA CANCELADA NO_PRESENTADA }
