@@ -1875,3 +1875,51 @@ td.actions{white-space:nowrap}
   .beauty-hero-actions{bottom:58px;width:calc(100% - 28px)}
   .beauty-hero-actions a{width:100%}
 }
+
+
+/* AJUSTES DE PORTADA SOLICITADOS */
+.public-header{
+  position:relative;
+  min-height:96px;
+  justify-content:center;
+  padding:10px 26px;
+}
+.public-logo-link{
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  display:block;
+  padding:0;
+  background:transparent!important;
+  border:0!important;
+}
+.public-logo{
+  width:min(360px,45vw);
+  height:74px;
+  max-width:none;
+  object-fit:contain;
+  object-position:center;
+  mix-blend-mode:normal;
+}
+.professional-access{
+  margin-left:auto;
+}
+.beauty-carousel-empty{
+  background:linear-gradient(135deg,#FAF7F2,#EEE5DA);
+}
+.beauty-carousel-empty img{display:none!important}
+.beauty-hero-actions{
+  bottom:42px;
+}
+.beauty-hero-actions .primary-button{
+  min-width:210px;
+}
+.client-access-heading p{display:none!important}
+@media(max-width:700px){
+  .public-header{min-height:82px;padding:8px 12px}
+  .public-logo{width:min(230px,50vw);height:60px}
+  .professional-access{font-size:11px;padding:8px 9px}
+  .beauty-hero-actions{bottom:34px;width:auto}
+  .beauty-hero-actions a{width:min(280px,80vw)}
+}
