@@ -140,6 +140,7 @@ model HeroImage {
 }
 
 model Product {
+  imageData String?
   id        String               @id @default(cuid())
   name      String
   brand     String?
